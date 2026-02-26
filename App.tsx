@@ -7,7 +7,7 @@ import { LocationType, ScoringMatrix } from './types';
 import { calculateSuitability } from './services/geoService';
 import { getSiteGuidance, GroundingSource, answerFreeform, conversationalQuery } from './services/geminiService';
 import './services/leaflet-heat'; // Local vendored version used
-import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Cell, Tooltip } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Cell, Tooltip, LabelList } from 'recharts';
 import { getLocationIntelligence, generateDataDrivenRecommendation, PlaceResult, textSearch } from './services/placesAPIService';
 import { executeSearch, getQueryDescription } from './searchUtils';
 import { ChatInterface } from './components/ChatInterface';
@@ -262,6 +262,9 @@ const App: React.FC = () => {
     const [suggestionIndex, setSuggestionIndex] = useState(-1);
     const searchRecognitionRef = useRef<any>(null);
     const searchInputRef = useRef<HTMLInputElement>(null);
+
+    // DOMAIN: Active analysis domain (gym / restaurant / bank)
+    const [activeDomain, setActiveDomain] = useState<'gym' | 'restaurant' | 'bank'>('gym');
 
 
     // AUTOCOMPLETE: Compute suggestions whenever searchQuery changes
@@ -1378,6 +1381,24 @@ const App: React.FC = () => {
 
 
 
+                    {/* Domain Selector */}
+                    <div>
+                        <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2 px-1">Analysis Domain</div>
+                        <div className="flex bg-slate-100 p-1 rounded-2xl gap-1">
+                            {([{ id: 'gym', emoji: '🏋️', label: 'Gym' }, { id: 'restaurant', emoji: '🍽️', label: 'F&B' }, { id: 'bank', emoji: '🏦', label: 'Finance' }] as const).map(d => (
+                                <button
+                                    key={d.id}
+                                    onClick={() => setActiveDomain(d.id)}
+                                    className={`flex-1 flex items-center justify-center gap-1 py-2 text-[9px] font-black rounded-xl transition-all ${activeDomain === d.id ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'
+                                        }`}
+                                >
+                                    <span>{d.emoji}</span>
+                                    <span>{d.label}</span>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
                     {/* Radius Selector */}
                     <div>
                         <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2 px-1">Catchment Radius</div>
@@ -1442,6 +1463,12 @@ const App: React.FC = () => {
                                 <Tooltip cursor={{ fill: 'transparent' }} />
                                 <Bar dataKey="score" radius={[0, 6, 6, 0]} barSize={16}>
                                     {chartData.map((entry, index) => <Cell key={`c-${index}`} fill={entry.color} />)}
+                                    <LabelList
+                                        dataKey="score"
+                                        position="right"
+                                        style={{ fontSize: '9px', fontWeight: '900', fill: '#64748b' }}
+                                        formatter={(v: number) => `${v}`}
+                                    />
                                 </Bar>
                             </BarChart>
                         </ResponsiveContainer>
