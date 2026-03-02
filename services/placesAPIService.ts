@@ -523,3 +523,168 @@ export async function getAggregateData(
         priceLevelDistribution,
     };
 }
+
+// ============================================================
+// DOMAIN-AWARE INTELLIGENCE (Multi-Domain)
+// ============================================================
+
+export interface DomainLocationIntelligence {
+    competitors: {
+        total: number;
+        highRated: number;
+        averageRating: number;
+        places: PlaceResult[];
+    };
+    corporateOffices: { total: number; places: PlaceResult[] };
+    apartments: { total: number; places: PlaceResult[] };
+    infraSynergy: { total: number; places: PlaceResult[] };
+    transitStations: { total: number; places: PlaceResult[] };
+    competitionLevel: 'LOW' | 'MEDIUM' | 'HIGH' | 'VERY_HIGH';
+    marketGap: 'SATURATED' | 'COMPETITIVE' | 'OPPORTUNITY' | 'UNTAPPED';
+}
+
+/**
+ * Generic location intelligence that works for any domain.
+ * Pass the domain's competitorTypes and infraTypes from DOMAIN_CONFIG.
+ */
+export async function getDomainIntelligence(
+    lat: number,
+    lng: number,
+    radiusMeters: number,
+    competitorTypes: string[],
+    infraTypes: string[]
+): Promise<DomainLocationIntelligence> {
+    const [competitors, establishments, infra, transit, lodging] = await Promise.all([
+        nearbySearch(lat, lng, radiusMeters, competitorTypes),
+        nearbySearch(lat, lng, radiusMeters, ['establishment']),
+        infraTypes.length > 0
+            ? nearbySearch(lat, lng, radiusMeters, infraTypes)
+            : Promise.resolve([] as PlaceResult[]),
+        nearbySearch(lat, lng, radiusMeters, ['bus_station', 'light_rail_station', 'subway_station']),
+        nearbySearch(lat, lng, radiusMeters, ['lodging']),
+    ]);
+
+    // Corporate filter
+    const corporates = establishments.filter(p => {
+        const name = p.displayName.toLowerCase();
+        const types = p.types.map(t => t.toLowerCase());
+        const isNonOffice = (
+            types.includes('restaurant') || types.includes('cafe') || types.includes('food') ||
+            types.includes('store') || types.includes('shopping') || types.includes('lodging') ||
+            types.includes('hospital') || types.includes('school') ||
+            name.includes('restaurant') || name.includes('hotel') || name.includes('cafe')
+        );
+        const isOffice = (
+            types.includes('office') || types.includes('business') || types.includes('professional_services') ||
+            name.includes('tech') || name.includes('software') || name.includes('corporate') ||
+            name.includes('pvt') || name.includes('ltd') || name.includes('inc') ||
+            name.includes('solutions') || name.includes('systems') || name.includes('services') || name.includes('consulting')
+        );
+        return isOffice || (!isNonOffice && establishments.length > 50);
+    });
+
+    // Apartment filter
+    const apartments = lodging.filter(p => {
+        const name = p.displayName.toLowerCase();
+        return (
+            name.includes('apartment') || name.includes('residency') || name.includes('residence') ||
+            name.includes('homes') || name.includes('enclave') || name.includes('tower') ||
+            name.includes('villa') || name.includes('flats') || name.includes('heights') ||
+            name.includes('gardens') || name.includes('park') ||
+            (!name.includes('hotel') && !name.includes('guest') && lodging.length < 20)
+        );
+    });
+
+    const highRated = competitors.filter(p => p.rating && p.rating >= 4.0);
+    const ratings = competitors.filter(p => p.rating).map(p => p.rating!);
+    const averageRating = ratings.length > 0
+        ? ratings.reduce((s, r) => s + r, 0) / ratings.length : 0;
+
+    let competitionLevel: 'LOW' | 'MEDIUM' | 'HIGH' | 'VERY_HIGH';
+    if (competitors.length <= 3) competitionLevel = 'LOW';
+    else if (competitors.length <= 8) competitionLevel = 'MEDIUM';
+    else if (competitors.length <= 15) competitionLevel = 'HIGH';
+    else competitionLevel = 'VERY_HIGH';
+
+    const fullDemandScore =
+        corporates.length +
+        (apartments.length * 0.7) +
+        (transit.length * 0.8) +
+        (infra.length * 0.5);
+
+    const estimatedCapacity = Math.max(5, fullDemandScore * 1.5);
+    const saturationRatio = competitors.length / estimatedCapacity;
+
+    let marketGap: 'SATURATED' | 'COMPETITIVE' | 'OPPORTUNITY' | 'UNTAPPED';
+    if (competitors.length === 0) marketGap = 'UNTAPPED';
+    else if (saturationRatio < 0.25) marketGap = 'OPPORTUNITY';
+    else if (saturationRatio < 0.6) marketGap = 'COMPETITIVE';
+    else marketGap = 'SATURATED';
+
+    return {
+        competitors: {
+            total: competitors.length,
+            highRated: highRated.length,
+            averageRating: parseFloat(averageRating.toFixed(1)),
+            places: competitors,
+        },
+        corporateOffices: { total: corporates.length, places: corporates },
+        apartments: { total: apartments.length, places: apartments },
+        infraSynergy: { total: infra.length, places: infra },
+        transitStations: { total: transit.length, places: transit },
+        competitionLevel,
+        marketGap,
+    };
+}
+
+export function generateDomainRecommendation(
+    intel: DomainLocationIntelligence,
+    competitorLabel: string
+): string {
+    const { competitors, corporateOffices, infraSynergy, transitStations, marketGap, competitionLevel } = intel;
+
+    let rec = `MARKET ASSESSMENT\n\n`;
+    rec += `Competition Level: ${competitionLevel}\n`;
+    rec += `Market Opportunity: ${marketGap}\n\n`;
+    rec += `Found ${competitors.total} existing ${competitorLabel.toLowerCase()}`;
+    if (competitors.highRated > 0) {
+        const pct = Math.round((competitors.highRated / competitors.total) * 100);
+        rec += ` (${competitors.highRated} rated 4+★ = ${pct}% strong, avg: ${competitors.averageRating}★)`;
+        if (pct > 50) rec += `\n⚠️ Majority are well-rated — quality differentiation is critical.`;
+        else rec += `\n✅ Many competitors are weak-rated — quality entry has clear advantage.`;
+    } else if (competitors.total > 0) {
+        rec += ` — no highly-rated competitors, quality entry has strong advantage`;
+    }
+    rec += `\n\n`;
+
+    rec += `DEMAND DRIVERS\n\n`;
+    rec += `✅ Corporate Offices: ${corporateOffices.total}\n`;
+    rec += `✅ Residential Density: ${intel.apartments.total} apartment complexes\n`;
+    rec += `✅ Infra / Synergy: ${infraSynergy.total} nearby places\n`;
+    rec += `✅ Transit Access: ${transitStations.total} stations\n\n`;
+
+    rec += `STRATEGIC RECOMMENDATION\n\n`;
+    if (marketGap === 'UNTAPPED') {
+        rec += `🎯 FIRST-MOVER ADVANTAGE — No ${competitorLabel.toLowerCase()} detected!\n`;
+        rec += `- Strong demand: ${corporateOffices.total} offices & ${intel.apartments.total} residential\n`;
+        rec += `- Establish brand presence aggressively\n`;
+    } else if (marketGap === 'OPPORTUNITY') {
+        rec += `🟢 HIGH POTENTIAL — Good demand-to-supply ratio.\n`;
+        rec += `- ${corporateOffices.total} corporates + ${intel.apartments.total} residential = strong base\n`;
+        rec += `- Differentiated positioning recommended\n`;
+    } else if (marketGap === 'COMPETITIVE') {
+        rec += `🟡 DIFFERENTIATION REQUIRED — Moderate competition.\n`;
+        rec += `- ${competitors.total} existing ${competitorLabel.toLowerCase()} in radius\n`;
+        rec += `- Niche strategy or unique offering needed\n`;
+    } else {
+        rec += `🔴 SATURATED MARKET — High competition.\n`;
+        rec += `- ${competitors.total} ${competitorLabel.toLowerCase()} competing for same customers\n`;
+        rec += `- Consider 500m+ relocation or strong differentiation\n`;
+    }
+
+    if (transitStations.total > 0) {
+        rec += `\nTRANSIT ADVANTAGE\n\n- ${transitStations.total} station(s) nearby → high pedestrian footfall\n`;
+    }
+
+    return rec;
+}

@@ -8,8 +8,9 @@ import { calculateSuitability } from './services/geoService';
 import { getSiteGuidance, GroundingSource, answerFreeform, conversationalQuery } from './services/geminiService';
 import './services/leaflet-heat'; // Local vendored version used
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Cell, Tooltip, LabelList } from 'recharts';
-import { getLocationIntelligence, generateDataDrivenRecommendation, PlaceResult, textSearch } from './services/placesAPIService';
+import { getLocationIntelligence, getDomainIntelligence, generateDataDrivenRecommendation, generateDomainRecommendation, PlaceResult, textSearch } from './services/placesAPIService';
 import { executeSearch, getQueryDescription } from './searchUtils';
+import { DOMAIN_CONFIG } from './domains';
 import { ChatInterface } from './components/ChatInterface';
 import { addMessage, loadConversationHistory, clearConversationHistory, getRecentContext, extractLocationMentions, Message } from './services/conversationService';
 import { processUserQuery } from './services/chatOrchestrationService';
@@ -22,6 +23,16 @@ import { processUserQuery } from './services/chatOrchestrationService';
 // --- ICONS ---
 const gymIcon = new L.Icon({
     iconUrl: 'https://cdn-icons-png.flaticon.com/512/2964/2964514.png',
+    iconSize: [26, 26],
+    className: 'drop-shadow-md'
+});
+const restaurantIcon = new L.Icon({
+    iconUrl: 'https://cdn-icons-png.flaticon.com/512/3448/3448609.png', // Fork & knife
+    iconSize: [26, 26],
+    className: 'drop-shadow-md'
+});
+const bankIcon = new L.Icon({
+    iconUrl: 'https://cdn-icons-png.flaticon.com/512/2830/2830284.png', // Bank building
     iconSize: [26, 26],
     className: 'drop-shadow-md'
 });
@@ -46,9 +57,16 @@ const metroIcon = new L.Icon({
     iconSize: [20, 20],
 });
 const busIcon = new L.Icon({
-    iconUrl: 'https://cdn-icons-png.flaticon.com/512/1068/1068757.png', // Bus
+    iconUrl: 'https://cdn-icons-png.flaticon.com/128/1178/1178850.png', // Bus
     iconSize: [18, 18],
 });
+
+// Domain → competitor icon mapping
+const DOMAIN_ICON_MAP = {
+    gym: { icon: gymIcon, emoji: '🏋️', infraEmoji: '☕', infraLabel: 'LIFESTYLE' },
+    restaurant: { icon: restaurantIcon, emoji: '🍽️', infraEmoji: '🛍️', infraLabel: 'FOOTFALL' },
+    bank: { icon: bankIcon, emoji: '🏦', infraEmoji: '🏬', infraLabel: 'COMMERCIAL' },
+};
 
 const getIconForType = (type: LocationType) => {
     switch (type) {
@@ -535,150 +553,185 @@ const App: React.FC = () => {
         setAiInsight('Fetching real POI data from Google Places...');
 
         try {
-            // Fetch real location intelligence from Places API
-            const intel = await getLocationIntelligence(
-                selectedPos[0],
-                selectedPos[1],
-                searchRadius
-            );
+            const domain = DOMAIN_CONFIG[activeDomain];
 
-            // Store real POIs for map markers (parks removed)
-            setRealPOIs({
-                gyms: intel.gyms.places,
-                cafes: intel.cafesRestaurants.places,
-                corporates: intel.corporateOffices.places,
-                transit: intel.transitStations.places,
-                apartments: intel.apartments.places, // NEW: Apartments
-                parks: [] // Keep for compatibility
-            });
+            if (activeDomain === 'gym') {
+                // ── GYM DOMAIN: Our advanced V2 scoring ─────────────────────
+                const intel = await getLocationIntelligence(
+                    selectedPos[0],
+                    selectedPos[1],
+                    searchRadius
+                );
 
+                setRealPOIs({
+                    gyms: intel.gyms.places,
+                    cafes: intel.cafesRestaurants.places,
+                    corporates: intel.corporateOffices.places,
+                    transit: intel.transitStations.places,
+                    apartments: intel.apartments.places,
+                    parks: []
+                });
 
-            // ── SCORING V2: log1p + demand-competition coupling ──
-            const logNorm = (count: number, sat: number) =>
-                Math.log1p(count) / Math.log1p(sat) * 100;
-            const clampScore = (v: number) => Math.max(0, Math.min(100, v));
+                const logNorm = (count: number, sat: number) =>
+                    Math.log1p(count) / Math.log1p(sat) * 100;
+                const clampScore = (v: number) => Math.max(0, Math.min(100, v));
 
-            const gymCt = intel.gyms.total;
-            const aptCt = intel.apartments.total;
-            const corpCt = intel.corporateOffices.total;
-            const cafeCt = intel.cafesRestaurants.total;
+                const gymCt = intel.gyms.total;
+                const aptCt = intel.apartments.total;
+                const corpCt = intel.corporateOffices.total;
+                const cafeCt = intel.cafesRestaurants.total;
 
-            // DEMAND (40%) — apartments lead, gyms erode up to 35%
-            const rawDemand = clampScore(
-                logNorm(aptCt, 40) * 0.55 +   // primary: residential density
-                logNorm(corpCt, 30) * 0.20 +   // reduced: noisy, false positives
-                logNorm(cafeCt, 30) * 0.25      // youth/lifestyle proxy
-            );
-            const gymPenalty = logNorm(gymCt, 15) / 100 * 0.35;
-            const demandScore = clampScore(rawDemand * (1 - gymPenalty));
+                const rawDemand = clampScore(
+                    logNorm(aptCt, 40) * 0.55 +
+                    logNorm(corpCt, 30) * 0.20 +
+                    logNorm(cafeCt, 30) * 0.25
+                );
+                const gymPenalty = logNorm(gymCt, 15) / 100 * 0.35;
+                const demandScore = clampScore(rawDemand * (1 - gymPenalty));
 
-            // MARKET GAP INDEX (30%) — demand-to-supply ratio, always shows a number
-            const demandUnits = aptCt + (corpCt * 0.8);
-            const gapRatio = demandUnits / Math.max(gymCt, 1);
-            const gapScore = clampScore(logNorm(gapRatio, 5)); // ratio 5:1 → ~100
+                const demandUnits = aptCt + (corpCt * 0.8);
+                const gapRatio = demandUnits / Math.max(gymCt, 1);
+                const gapScore = clampScore(logNorm(gapRatio, 5));
 
-            // VIBE (20%) — active lifestyle + entertainment signals
-            const vibeCt = (intel as any).vibe?.total ?? 0;
-            const vibeActive = (intel as any).vibe?.active ?? 0;
-            const vibeSocial = (intel as any).vibe?.entertainment ?? 0;
-            const vibeScore = clampScore(
-                logNorm(vibeActive, 6) * 0.55 +
-                logNorm(vibeSocial, 8) * 0.45
-            );
+                const vibeCt = (intel as any).vibe?.total ?? 0;
+                const vibeActive = (intel as any).vibe?.active ?? 0;
+                const vibeSocial = (intel as any).vibe?.entertainment ?? 0;
+                const vibeScore = clampScore(
+                    logNorm(vibeActive, 6) * 0.55 +
+                    logNorm(vibeSocial, 8) * 0.45
+                );
 
-            // CONNECTIVITY (10%) — metro outweighs bus
-            const metroCt = intel.transitStations.places.filter((p: any) =>
-                p.types?.some((t: string) => t.includes('subway') || t.includes('light_rail'))
-            ).length;
-            const busCt = intel.transitStations.total - metroCt;
-            const connScore = clampScore(logNorm(metroCt, 5) * 0.65 + logNorm(busCt, 10) * 0.6 * 0.35);
+                const metroCt = intel.transitStations.places.filter((p: any) =>
+                    p.types?.some((t: string) => t.includes('subway') || t.includes('light_rail'))
+                ).length;
+                const busCt = intel.transitStations.total - metroCt;
+                const connScore = clampScore(logNorm(metroCt, 5) * 0.65 + logNorm(busCt, 10) * 0.6 * 0.35);
 
-            const realScores = {
-                demographicLoad: Math.round(demandScore),
-                connectivity: Math.round(connScore),
-                competitorRatio: Math.round(gapScore),   // Gap Index (always non-zero if demand exists)
-                infrastructure: Math.round(vibeScore),
-                total: Math.round(demandScore * 0.30 + gapScore * 0.30 + vibeScore * 0.25 + connScore * 0.15)
-            };
+                const realScores = {
+                    demographicLoad: Math.round(demandScore),
+                    connectivity: Math.round(connScore),
+                    competitorRatio: Math.round(gapScore),
+                    infrastructure: Math.round(vibeScore),
+                    total: Math.round(demandScore * 0.30 + gapScore * 0.30 + vibeScore * 0.25 + connScore * 0.15)
+                };
 
-            console.log('📊 SCORING V2:', {
-                demand: `${realScores.demographicLoad}/100 (raw:${Math.round(rawDemand)} pen:${(gymPenalty * 100).toFixed(0)}%)`,
-                gap: `${realScores.competitorRatio}/100 (ratio:${gapRatio.toFixed(2)})`,
-                vibe: `${realScores.infrastructure}/100 (active:${vibeActive} social:${vibeSocial})`,
-                conn: `${realScores.connectivity}/100 (metro:${metroCt} bus:${busCt})`,
-                total: `${realScores.total}/100`
-            });
+                console.log('📊 SCORING V2 (GYM):', realScores);
+                setScores(realScores);
 
-            setScores(realScores);
+                if (selectedCluster) {
+                    const opportunityScore = realScores.total / 100;
+                    const finalScore = opportunityScore;
+                    const demographicLoad = realScores.demographicLoad;
+                    const competitorDensity = intel.gyms.total;
+                    let growthRate = 0;
+                    if (intel.marketGap === 'UNTAPPED') growthRate = 0.15;
+                    else if (intel.marketGap === 'OPPORTUNITY') growthRate = 0.10;
+                    else if (intel.marketGap === 'COMPETITIVE') growthRate = 0.05;
+                    else growthRate = 0.02;
+                    if (demographicLoad > 70) growthRate += 0.03;
+                    if (intel.corporateOffices.total > 10) growthRate += 0.02;
+                    setWardScores(prev => ({ ...prev, [selectedCluster]: { opportunityScore, finalScore, growthRate, demographicLoad, competitorDensity } }));
+                }
 
+                const recommendation = generateDataDrivenRecommendation(intel, realScores);
+                setAiInsight(recommendation);
 
-            // Calculate and store ward-specific scores if analyzing a cluster
-            if (selectedCluster) {
-                const opportunityScore = realScores.total / 100; // Convert to 0-1 scale
-                const finalScore = opportunityScore; // Same as opportunity for now
-                const demographicLoad = realScores.demographicLoad;
-                const competitorDensity = intel.gyms.total;
+            } else {
+                // ── RESTAURANT / BANK DOMAIN: Generic domain intelligence ────
+                const intel = await getDomainIntelligence(
+                    selectedPos[0],
+                    selectedPos[1],
+                    searchRadius,
+                    domain.competitorTypes,
+                    domain.infraTypes
+                );
 
-                // Calculate growth rate based on market gap and demand
-                let growthRate = 0;
-                if (intel.marketGap === 'UNTAPPED') growthRate = 0.15; // 15% potential
-                else if (intel.marketGap === 'OPPORTUNITY') growthRate = 0.10; // 10% potential
-                else if (intel.marketGap === 'COMPETITIVE') growthRate = 0.05; // 5% potential
-                else growthRate = 0.02; // 2% in saturated markets
+                // Show competitor markers on map (use gyms slot for domain competitors)
+                setRealPOIs({
+                    gyms: intel.competitors.places,        // competitor markers
+                    cafes: intel.infraSynergy.places,      // infra/synergy markers
+                    corporates: intel.corporateOffices.places,
+                    transit: intel.transitStations.places,
+                    apartments: intel.apartments.places,
+                    parks: []
+                });
 
-                // Boost growth if high demographic load
-                if (demographicLoad > 70) growthRate += 0.03;
-                if (intel.corporateOffices.total > 10) growthRate += 0.02;
+                // Domain-specific scoring using domain weights
+                const logNorm = (count: number, sat: number) =>
+                    Math.log1p(count) / Math.log1p(sat) * 100;
+                const clampScore = (v: number) => Math.max(0, Math.min(100, v));
+                const w = domain.scoring;
 
-                setWardScores(prev => ({
-                    ...prev,
-                    [selectedCluster]: {
-                        opportunityScore,
-                        finalScore,
-                        growthRate,
-                        demographicLoad,
-                        competitorDensity
-                    }
-                }));
+                const compCt = intel.competitors.total;
+                const aptCt = intel.apartments.total;
+                const corpCt = intel.corporateOffices.total;
+                const infraCt = intel.infraSynergy.total;
+                const metroCt = intel.transitStations.places.filter((p: any) =>
+                    p.types?.some((t: string) => t.includes('subway') || t.includes('light_rail'))
+                ).length;
+                const busCt = intel.transitStations.total - metroCt;
 
-                console.log(`✅ CALCULATED WARD SCORES for ${selectedCluster}:`);
-                console.log(`  Opportunity Score: ${(opportunityScore * 100).toFixed(1)}%`);
-                console.log(`  Final Score: ${(finalScore * 100).toFixed(1)}%`);
-                console.log(`  Growth Rate: +${(growthRate * 100).toFixed(1)}%`);
+                const demandScore = clampScore(logNorm(aptCt, 40) * 0.55 + logNorm(corpCt, 30) * 0.45);
+                const connScore = clampScore(logNorm(metroCt, 5) * 0.65 + logNorm(busCt, 10) * 0.35);
+                const demandUnits = aptCt + corpCt + (infraCt * 0.5);
+                const gapRatio = demandUnits / Math.max(compCt, 1);
+                const gapScore = clampScore(logNorm(gapRatio, 5));
+                const infraScore = clampScore(logNorm(infraCt, 15));
+
+                const realScores = {
+                    demographicLoad: Math.round(demandScore),
+                    connectivity: Math.round(connScore),
+                    competitorRatio: Math.round(gapScore),
+                    infrastructure: Math.round(infraScore),
+                    total: Math.round(
+                        demandScore * w.demand.weight +
+                        connScore * w.connectivity.weight +
+                        gapScore * w.gap.weight +
+                        infraScore * w.infra.weight
+                    )
+                };
+
+                console.log(`📊 SCORING (${domain.label}):`, realScores);
+                setScores(realScores);
+
+                if (selectedCluster) {
+                    const opportunityScore = realScores.total / 100;
+                    const finalScore = opportunityScore;
+                    let growthRate = intel.marketGap === 'UNTAPPED' ? 0.15 :
+                        intel.marketGap === 'OPPORTUNITY' ? 0.10 :
+                            intel.marketGap === 'COMPETITIVE' ? 0.05 : 0.02;
+                    if (realScores.demographicLoad > 70) growthRate += 0.03;
+                    setWardScores(prev => ({ ...prev, [selectedCluster]: { opportunityScore, finalScore, growthRate, demographicLoad: realScores.demographicLoad, competitorDensity: intel.competitors.total } }));
+                }
+
+                const recommendation = generateDomainRecommendation(intel, domain.competitorLabel);
+                setAiInsight(recommendation);
             }
-
-            // Generate data-driven recommendation backed by score breakdown
-            const recommendation = generateDataDrivenRecommendation(intel, realScores);
-            setAiInsight(recommendation);
-
 
             setIsAnalyzing(false);
         } catch (error) {
             console.error('Places API analysis failed:', error);
             setAiInsight('⚠️ Places API unavailable. Add GOOGLE_MAPS_API_KEY to .env.local for real POI data. Using fallback mock data...');
-
-            // Fallback to old logic
             const fallbackScores = calculateSuitability(selectedPos[0], selectedPos[1], searchRadius / 1000);
             setScores(fallbackScores);
             setIsAnalyzing(false);
         }
-    }, [selectedPos]); // ✅ searchRadius removed — radius change no longer fires 6 API requests
+    }, [selectedPos, activeDomain, searchRadius, selectedCluster]);
 
     // ✅ Debounced analysis — prevents burst requests on rapid clicks
     const analysisDebounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
         if (selectedPos) {
-            // Cancel any pending analysis from a previous click
             if (analysisDebounceRef.current) clearTimeout(analysisDebounceRef.current);
             analysisDebounceRef.current = setTimeout(() => {
                 performAnalysis();
-            }, 500); // 500ms debounce — ignores rapid/accidental clicks
+            }, 500);
         }
         return () => {
             if (analysisDebounceRef.current) clearTimeout(analysisDebounceRef.current);
         };
-    }, [selectedPos, performAnalysis]);
+    }, [selectedPos, activeDomain, performAnalysis]);
 
     const catchmentOverlap = useMemo(() => {
         if (!selectedPos) return [];
@@ -697,17 +750,19 @@ const App: React.FC = () => {
 
     // UPDATED: Use real POI data from Google Places API instead of mock data
     const competitors = realPOIs.gyms.length;
+    const domain = DOMAIN_CONFIG[activeDomain];
     const demandGenerators = realPOIs.corporates.length + realPOIs.cafes.length;
 
     const chartData = useMemo(() => {
         if (!scores) return [];
+        const d = DOMAIN_CONFIG[activeDomain].scoring;
         return [
-            { name: 'Demand', score: scores.demographicLoad, color: '#6366f1', desc: 'Corp + Resident' }, // Indigo (30%)
-            { name: 'Access', score: scores.connectivity, color: '#34d399', desc: 'Metro/Bus' }, // Emerald (15%)
-            { name: 'Gap', score: scores.competitorRatio, color: '#f59e0b', desc: 'Market Space' }, // Amber (30%)
-            { name: 'Vibe', score: scores.infrastructure, color: '#ec4899', desc: 'Cafes/Lifestyle' }, // Pink (25%)
+            { name: d.demand.label, score: scores.demographicLoad, color: d.demand.color, desc: d.demand.desc },
+            { name: d.connectivity.label, score: scores.connectivity, color: d.connectivity.color, desc: d.connectivity.desc },
+            { name: d.gap.label, score: scores.competitorRatio, color: d.gap.color, desc: d.gap.desc },
+            { name: d.infra.label, score: scores.infrastructure, color: d.infra.color, desc: d.infra.desc },
         ];
-    }, [scores]);
+    }, [scores, activeDomain]);
 
     const getVerdict = () => {
         if (!scores) return { text: "SELECT AREA", color: "text-slate-400" };
@@ -881,27 +936,30 @@ const App: React.FC = () => {
                     )}
 
 
-                    {/* REAL POI Markers from Google Places API */}
-                    {selectedPos && realPOIs.gyms.length > 0 && realPOIs.gyms.map((gym, idx) => (
-                        <Marker key={`gym-${idx}`} position={[gym.location.lat, gym.location.lng]} icon={gymIcon}>
-                            <Popup>
-                                <div className="p-2 min-w-[180px]">
-                                    <div className="font-black text-slate-800 text-sm mb-1">🏋️ {gym.displayName}</div>
-                                    {gym.rating && (
-                                        <div className="flex items-center gap-1 mb-1">
-                                            <span className="text-yellow-500 text-xs">★</span>
-                                            <span className="text-xs font-bold">{gym.rating.toFixed(1)}</span>
-                                            {gym.userRatingCount && (
-                                                <span className="text-[9px] text-slate-400">({gym.userRatingCount} reviews)</span>
-                                            )}
-                                        </div>
-                                    )}
-                                    <span className="text-[9px] font-bold text-white px-2 py-0.5 rounded-full uppercase tracking-widest bg-red-500">COMPETITOR</span>
-                                    {gym.formattedAddress && <div className="mt-2 text-[9px] text-slate-500 italic border-t pt-1">{gym.formattedAddress}</div>}
-                                </div>
-                            </Popup>
-                        </Marker>
-                    ))}
+                    {/* REAL POI Markers from Google Places API — domain-aware icon */}
+                    {selectedPos && realPOIs.gyms.length > 0 && realPOIs.gyms.map((gym, idx) => {
+                        const domainMeta = DOMAIN_ICON_MAP[activeDomain];
+                        return (
+                            <Marker key={`competitor-${idx}`} position={[gym.location.lat, gym.location.lng]} icon={domainMeta.icon}>
+                                <Popup>
+                                    <div className="p-2 min-w-[180px]">
+                                        <div className="font-black text-slate-800 text-sm mb-1">{domainMeta.emoji} {gym.displayName}</div>
+                                        {gym.rating && (
+                                            <div className="flex items-center gap-1 mb-1">
+                                                <span className="text-yellow-500 text-xs">★</span>
+                                                <span className="text-xs font-bold">{gym.rating.toFixed(1)}</span>
+                                                {gym.userRatingCount && (
+                                                    <span className="text-[9px] text-slate-400">({gym.userRatingCount} reviews)</span>
+                                                )}
+                                            </div>
+                                        )}
+                                        <span className="text-[9px] font-bold text-white px-2 py-0.5 rounded-full uppercase tracking-widest bg-red-500">COMPETITOR</span>
+                                        {gym.formattedAddress && <div className="mt-2 text-[9px] text-slate-500 italic border-t pt-1">{gym.formattedAddress}</div>}
+                                    </div>
+                                </Popup>
+                            </Marker>
+                        );
+                    })}
 
                     {selectedPos && realPOIs.corporates.length > 0 && realPOIs.corporates.map((corp, idx) => (
                         <Marker key={`corp-${idx}`} position={[corp.location.lat, corp.location.lng]} icon={corporateIcon}>
@@ -945,26 +1003,29 @@ const App: React.FC = () => {
                     {/* Parks removed - no longer fetched or displayed */}
 
 
-                    {selectedPos && realPOIs.cafes.length > 0 && realPOIs.cafes.map((cafe, idx) => (
-                        <Marker key={`cafe-${idx}`} position={[cafe.location.lat, cafe.location.lng]} icon={synergyIcon}>
-                            <Popup>
-                                <div className="p-2 min-w-[160px]">
-                                    <div className="font-black text-slate-800 text-sm mb-1">☕ {cafe.displayName}</div>
-                                    {cafe.rating && (
-                                        <div className="flex items-center gap-1 mb-1">
-                                            <span className="text-yellow-500 text-xs">★</span>
-                                            <span className="text-xs font-bold">{cafe.rating.toFixed(1)}</span>
-                                            {cafe.userRatingCount && (
-                                                <span className="text-[9px] text-slate-400">({cafe.userRatingCount} reviews)</span>
-                                            )}
-                                        </div>
-                                    )}
-                                    <span className="text-[9px] font-bold text-white px-2 py-0.5 rounded-full uppercase tracking-widest bg-amber-500">LIFESTYLE</span>
-                                    {cafe.formattedAddress && <div className="mt-2 text-[9px] text-slate-500 italic border-t pt-1">{cafe.formattedAddress}</div>}
-                                </div>
-                            </Popup>
-                        </Marker>
-                    ))}
+                    {selectedPos && realPOIs.cafes.length > 0 && realPOIs.cafes.map((cafe, idx) => {
+                        const domainMeta = DOMAIN_ICON_MAP[activeDomain];
+                        return (
+                            <Marker key={`infra-${idx}`} position={[cafe.location.lat, cafe.location.lng]} icon={synergyIcon}>
+                                <Popup>
+                                    <div className="p-2 min-w-[160px]">
+                                        <div className="font-black text-slate-800 text-sm mb-1">{domainMeta.infraEmoji} {cafe.displayName}</div>
+                                        {cafe.rating && (
+                                            <div className="flex items-center gap-1 mb-1">
+                                                <span className="text-yellow-500 text-xs">★</span>
+                                                <span className="text-xs font-bold">{cafe.rating.toFixed(1)}</span>
+                                                {cafe.userRatingCount && (
+                                                    <span className="text-[9px] text-slate-400">({cafe.userRatingCount} reviews)</span>
+                                                )}
+                                            </div>
+                                        )}
+                                        <span className="text-[9px] font-bold text-white px-2 py-0.5 rounded-full uppercase tracking-widest bg-amber-500">{domainMeta.infraLabel}</span>
+                                        {cafe.formattedAddress && <div className="mt-2 text-[9px] text-slate-500 italic border-t pt-1">{cafe.formattedAddress}</div>}
+                                    </div>
+                                </Popup>
+                            </Marker>
+                        );
+                    })}
 
                     {/* Transit Markers — split metro vs bus */}
                     {selectedPos && realPOIs.transit.length > 0 && realPOIs.transit.map((station, idx) => {
@@ -1113,9 +1174,9 @@ const App: React.FC = () => {
                     <div className="bg-white/90 backdrop-blur-md px-4 py-2.5 rounded-[1.25rem] shadow-xl border border-white/80 pointer-events-auto flex items-center gap-4">
                         <span className="text-[9px] font-black text-slate-800 uppercase tracking-widest border-r border-slate-200 pr-4">Legend</span>
                         <div className="flex items-center gap-4">
-                            <div className="flex items-center gap-1.5" title="Competitor Gyms">
-                                <img src="https://cdn-icons-png.flaticon.com/512/2964/2964514.png" className="w-4 h-4" alt="gym" />
-                                <span className="text-[9px] text-slate-600 font-bold">Gym</span>
+                            <div className="flex items-center gap-1.5" title={`${domain.competitorLabel} (Competitors)`}>
+                                <img src={DOMAIN_ICON_MAP[activeDomain].icon.options.iconUrl} className="w-4 h-4" alt="competitor" />
+                                <span className="text-[9px] text-slate-600 font-bold">{domain.competitorLabel}</span>
                             </div>
                             <div className="flex items-center gap-1.5" title="Corporate Offices">
                                 <img src="https://cdn-icons-png.flaticon.com/512/3061/3061341.png" className="w-4 h-4" alt="office" />
@@ -1155,7 +1216,9 @@ const App: React.FC = () => {
                     </div>
                     <div className="flex-1">
                         <div className="text-[11px] lg:text-sm font-black text-slate-900 leading-tight">Multi-Layer Scanning</div>
-                        <div className="text-[8px] lg:text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-0.5">Found: {competitors} Gyms, {demandGenerators} Generators</div>
+                        <div className="text-[8px] lg:text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-0.5">
+                            Found: {competitors} {domain.competitorLabel}, {demandGenerators} Generators
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1385,7 +1448,7 @@ const App: React.FC = () => {
                     <div>
                         <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2 px-1">Analysis Domain</div>
                         <div className="flex bg-slate-100 p-1 rounded-2xl gap-1">
-                            {([{ id: 'gym', emoji: '🏋️', label: 'Gym' }, { id: 'restaurant', emoji: '🍽️', label: 'F&B' }, { id: 'bank', emoji: '🏦', label: 'Finance' }] as const).map(d => (
+                            {([{ id: 'gym', emoji: '🏋️', label: 'Gym' }, { id: 'restaurant', emoji: '🍽️', label: 'Restaurants' }, { id: 'bank', emoji: '🏦', label: 'Banks' }] as const).map(d => (
                                 <button
                                     key={d.id}
                                     onClick={() => setActiveDomain(d.id)}
