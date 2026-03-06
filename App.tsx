@@ -601,15 +601,18 @@ const App: React.FC = () => {
         }
     }, [selectedPos, searchRadius]);
 
-    const performAnalysis = useCallback(async () => {
+    const performAnalysis = useCallback(async (overrideDomain?: string) => {
         if (!selectedPos) return;
         setIsAnalyzing(true);
         setAiInsight('Fetching real POI data from Google Places...');
 
-        try {
-            const domain = DOMAIN_CONFIG[activeDomain];
+        // Use overrideDomain if supplied (e.g. from chat), otherwise use active UI domain
+        const domainToUse = (overrideDomain || activeDomain) as keyof typeof DOMAIN_CONFIG;
 
-            if (activeDomain === 'gym') {
+        try {
+            const domain = DOMAIN_CONFIG[domainToUse];
+
+            if (domainToUse === 'gym') {
                 // ── GYM DOMAIN: Our advanced V2 scoring ─────────────────────
                 const intel = await getLocationIntelligence(
                     selectedPos[0],
@@ -626,7 +629,7 @@ const App: React.FC = () => {
                     parks: []
                 });
 
-                const realScores = calculateDomainScores(intel, activeDomain, searchRadius);
+                const realScores = calculateDomainScores(intel, domainToUse, searchRadius);
 
                 console.log('📊 SCORING V2 (GYM):', realScores);
                 setScores(realScores);
@@ -670,7 +673,7 @@ const App: React.FC = () => {
                 });
 
                 // Domain-specific scoring using dynamically loaded engine
-                const realScores = calculateDomainScores(intel, activeDomain, searchRadius);
+                const realScores = calculateDomainScores(intel, domainToUse, searchRadius);
 
                 console.log(`📊 SCORING (${domain.label}):`, realScores);
                 setScores(realScores);
@@ -685,7 +688,7 @@ const App: React.FC = () => {
                     setWardScores(prev => ({ ...prev, [selectedCluster]: { opportunityScore, finalScore, growthRate, demographicLoad: realScores.demographicLoad, competitorDensity: intel.competitors.total } }));
                 }
 
-                const recommendation = generateDomainRecommendation(intel, activeDomain);
+                const recommendation = generateDomainRecommendation(intel, domainToUse);
                 setAiInsight(recommendation);
             }
 
@@ -777,6 +780,16 @@ const App: React.FC = () => {
 
             console.log('🚀 Starting agentic flow for:', message);
 
+            // ── Domain Detection (free keyword match, no API call) ──────────
+            const intent = parseSearchIntent(message);
+            const detectedDomain = (intent.hasDomain && intent.domain) ? intent.domain : activeDomain;
+
+            // Auto-switch domain in UI if chat detected a different one
+            if (intent.hasDomain && intent.domain && intent.domain !== activeDomain) {
+                console.log(`🔀 Chat switching domain: ${activeDomain} → ${intent.domain}`);
+                setActiveDomain(intent.domain as DomainId);
+            }
+
             // Build conversation context
             const recentContext = getRecentContext(updatedMessages).map(msg => ({
                 role: msg.role,
@@ -788,6 +801,7 @@ const App: React.FC = () => {
                 recentMessages: recentContext,
                 currentLocation: selectedPos || undefined,
                 selectedWard: selectedWard || undefined,
+                domain: detectedDomain,
                 radius: searchRadius,
                 scores: scores || undefined,
                 realPOIs: realPOIs,
@@ -818,21 +832,33 @@ const App: React.FC = () => {
 
                             if (action.payload.triggerAnalysis) {
                                 if (response.prefetchedIntel) {
-                                    // ✅ Chat already fetched intel — apply directly, skip re-fetch
+                                    // ✅ Chat already fetched intel — apply directly, skip re-fetch (zero extra API calls)
                                     console.log('♻️ Using prefetchedIntel — skipping performAnalysis()');
                                     const intel = response.prefetchedIntel;
                                     setRealPOIs({
-                                        gyms: intel.gyms?.places || [],
-                                        cafes: intel.cafesRestaurants?.places || [],
+                                        gyms: intel.gyms?.places || intel.competitors?.places || [],
+                                        cafes: intel.cafesRestaurants?.places || intel.infraSynergy?.places || [],
                                         corporates: intel.corporateOffices?.places || [],
                                         transit: intel.transitStations?.places || [],
                                         apartments: intel.apartments?.places || [],
                                         parks: []
                                     });
+                                    // Compute scores + strategy from prefetchedIntel (LocationIntelligence shape)
+                                    // Note: prefetchedIntel is always LocationIntelligence from chatOrchestrationService.
+                                    // generateDataDrivenRecommendation works for this format across all domains.
+                                    const cachedScores = calculateDomainScores(intel, detectedDomain as DomainId, searchRadius);
+                                    setScores(cachedScores);
+                                    setAiInsight(generateDataDrivenRecommendation(intel, cachedScores));
+
+                                    // For non-gym domains, fire performAnalysis in background to get
+                                    // the proper domain-specific scoring (no UI blocking, free re-use of cache)
+                                    if (detectedDomain !== 'gym') {
+                                        setTimeout(() => { performAnalysis(detectedDomain); }, 400);
+                                    }
                                 } else {
-                                    // Fallback: trigger fresh analysis
-                                    console.log('🔍 Triggering performAnalysis() — no prefetchedIntel');
-                                    setTimeout(() => { performAnalysis(); }, 300);
+                                    // Fallback: trigger fresh analysis with the detected domain
+                                    console.log('🔍 Triggering performAnalysis() — no prefetchedIntel, domain:', detectedDomain);
+                                    setTimeout(() => { performAnalysis(detectedDomain); }, 300);
                                 }
                             }
                         }

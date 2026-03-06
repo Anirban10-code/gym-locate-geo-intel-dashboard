@@ -29,6 +29,7 @@ export interface ChatContext {
     recentMessages?: Array<{ role: string; content: string }>;
     currentLocation?: [number, number];
     selectedWard?: string;
+    domain?: string; // currently active domain: 'gym' | 'retail' | 'restaurant' | 'bank'
     radius?: number;
     scores?: ScoringMatrix;
     realPOIs?: any;
@@ -114,7 +115,7 @@ export async function processUserQuery(
             contents: fullPrompt,
             config: {
                 temperature: 0.3,
-                maxOutputTokens: 800
+                maxOutputTokens: 1500
             }
         });
 
@@ -147,14 +148,24 @@ export async function processUserQuery(
             // Step 6: Second Gemini call with data context
             // ============================================
 
-            const contextualPrompt = `${systemPrompt}\n\nUser: ${userMessage}\n\nPlaces API Results:\n${formattedResults}\n\nProvide a natural language response incorporating this data. Be specific with numbers and recommendations.`;
+            const contextualPrompt = `${systemPrompt}
+
+User: ${userMessage}
+
+Places API Analysis Results:
+${formattedResults}
+
+INSTRUCTIONS:
+You are provided with a pre-computed "GEO-GROUNDED STRATEGY" above. 
+DO NOT re-calculate or invent your own strategy from scratch. 
+Simply summarize this existing strategic analysis naturally for the user. Be concise, highlight the key numbers, and seamlessly weave in the provided tactical recommendation.`;
 
             const finalResponse = await ai.models.generateContent({
                 model: 'gemini-2.5-flash',
                 contents: contextualPrompt,
                 config: {
                     temperature: 0.4,
-                    maxOutputTokens: 600
+                    maxOutputTokens: 2048
                 }
             });
 
@@ -177,6 +188,26 @@ export async function processUserQuery(
         } else {
             // No Places data needed - direct response
             console.log('💬 Direct response (no Places API needed)');
+
+            // Fail-safe: Only block if the ENTIRE response is a raw JSON tool call
+            // (i.e., Gemini returned ONLY the JSON with no surrounding text).
+            // Don't block if it's a normal text reply that happens to mention JSON.
+            const trimmed = geminiText.trim();
+            const isRawJsonLeak = (trimmed.startsWith('```json') || trimmed.startsWith('{')) &&
+                geminiText.includes('"tool": "places_api"') &&
+                !geminiText.match(/[A-Za-z]{20,}/); // No substantial English prose
+
+            if (isRawJsonLeak) {
+                console.warn('⚠️ Intercepted raw JSON tool call in fallback path — Gemini JSON parse failed');
+                // Instead of showing an error, gracefully ask to retry
+                const domainName = context.domain || 'business';
+                const area = context.selectedWard || 'this area';
+                return {
+                    text: `I understand you're asking about ${domainName} options in ${area}. Could you be more specific about what you'd like to know — e.g. competition, best spots, or footfall potential?`,
+                    usedPlacesAPI: false,
+                    usedGemini: true
+                };
+            }
 
             return {
                 text: geminiText,
@@ -203,39 +234,51 @@ export async function processUserQuery(
  * Build system prompt explaining Places API capabilities
  */
 function buildAgenticSystemPrompt(context: ChatContext): string {
-    let prompt = `You are a geo-intelligence assistant helping users find optimal gym locations in Bangalore.
+    // Map domain keys to human-readable labels
+    const domainLabels: Record<string, string> = {
+        gym: 'gym / fitness centre',
+        retail: 'retail store',
+        restaurant: 'restaurant / food & beverage outlet',
+        bank: 'bank / financial services branch',
+    };
+    const activeDomain = context.domain || 'gym';
+    const domainLabel = domainLabels[activeDomain] || activeDomain;
 
-You have access to a **Places API Tool** that can fetch real-time location data. When users ask about locations, businesses, or area analysis, you can request data by responding with:
+    let prompt = `You are a geo-intelligence assistant helping users find optimal **${domainLabel}** locations in Bangalore.
+
+You have access to a **Places API Tool** that can fetch real-time location data. When users ask about locations, businesses, or area analysis, respond with ONLY a valid JSON block like this (choose one action):
 
 \`\`\`json
 {
   "tool": "places_api",
-  "action": "analyze_location" | "search_places" | "get_intelligence",
+  "action": "get_intelligence",
   "params": {
-    "lat": number,
-    "lng": number,
-    "radius": number (in meters),
-    "types": ["gym", "cafe", "restaurant", etc.],
-    "query": "natural language search query"
+    "lat": 12.9716,
+    "lng": 77.5946,
+    "radius": 1000,
+    "types": ["${activeDomain}"],
+    "query": "search term if needed"
   }
 }
 \`\`\`
 
 **Available Actions:**
-- \`analyze_location\`: Full area analysis (gyms, competition, demand, scores)
+- \`analyze_location\`: Full area analysis (${domainLabel}s, competition, demand, scores)
 - \`search_places\`: Find specific places by type or query
 - \`get_intelligence\`: Comprehensive location intelligence report
 
 **When to use Places API:**
-- User asks about specific locations ("Find gyms in HSR Layout")
-- User wants competition analysis ("How many gyms are nearby?")
-- User asks for recommendations ("Best area for a gym?")
+- User asks about specific locations ("Find ${domainLabel}s in HSR Layout")
+- User wants competition analysis ("How many ${domainLabel}s are nearby?")
+- User asks for recommendations ("Best area for a ${domainLabel}?")
 - User wants to compare areas
 
 **When NOT to use Places API:**
 - General questions (greetings, clarifications)
 - Questions about current visible data
 - Simple conversations
+
+**CRITICAL:** If you decide to call the Places API, respond with ONLY the JSON block above. Do not add any extra text before or after the JSON — this will cause a parsing error.
 
 `;
 
