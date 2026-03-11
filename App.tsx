@@ -22,52 +22,99 @@ import { processUserQuery } from './services/chatOrchestrationService';
  */
 
 // --- ICONS ---
-const gymIcon = new L.Icon({
-    iconUrl: 'https://cdn-icons-png.flaticon.com/512/2964/2964514.png',
-    iconSize: [26, 26],
-    className: 'drop-shadow-md'
-});
-const restaurantIcon = new L.Icon({
-    iconUrl: 'https://cdn-icons-png.flaticon.com/512/3448/3448609.png', // Fork & knife
-    iconSize: [26, 26],
-    className: 'drop-shadow-md'
-});
-const bankIcon = new L.Icon({
-    iconUrl: 'https://cdn-icons-png.flaticon.com/512/2830/2830284.png', // Bank building
-    iconSize: [26, 26],
-    className: 'drop-shadow-md'
-});
+
+/**
+ * Creates a colored teardrop pin icon for competitor markers.
+ * The pin head contains the domain icon; the pointed tail anchors to the map location.
+ */
+function createCompetitorPin(iconUrl: string, color: string): L.DivIcon {
+    return L.divIcon({
+        className: '',
+        html: `
+            <div style="
+                position: relative;
+                width: 34px;
+                height: 42px;
+                display: flex;
+                align-items: flex-start;
+                justify-content: center;
+            ">
+                <!-- Pin head: circle with domain color -->
+                <div style="
+                    width: 34px;
+                    height: 34px;
+                    background: ${color};
+                    border-radius: 50% 50% 50% 0;
+                    transform: rotate(-45deg);
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+                    border: 2px solid rgba(255,255,255,0.85);
+                    flex-shrink: 0;
+                ">
+                    <img src="${iconUrl}" style="
+                        width: 18px;
+                        height: 18px;
+                        transform: rotate(45deg);
+                        object-fit: contain;
+                    " />
+                </div>
+            </div>`,
+        iconSize: [34, 42],
+        iconAnchor: [17, 42],   // tip of the pin tail
+        popupAnchor: [0, -44],
+    });
+}
+
+const gymIcon = createCompetitorPin('https://cdn-icons-png.flaticon.com/512/2964/2964514.png', '#6366f1');      // indigo
+const restaurantIcon = createCompetitorPin('https://cdn-icons-png.flaticon.com/512/3448/3448609.png', '#f59e0b');     // amber
+const bankIcon = createCompetitorPin('https://cdn-icons-png.flaticon.com/512/2830/2830284.png', '#3b82f6');      // blue
+const retailIcon = createCompetitorPin('https://cdn-icons-png.flaticon.com/512/3081/3081648.png', '#8b5cf6');      // purple
+
 const synergyIcon = new L.Icon({
-    iconUrl: 'https://cdn-icons-png.flaticon.com/512/3054/3054889.png', // Coffee
-    iconSize: [20, 20],
+    iconUrl: 'https://cdn-icons-png.freepik.com/256/17695/17695120.png?semt=ais_white_label', // Lifestyle synergy
+    iconSize: [16, 16],
+});
+const cafeIcon = new L.Icon({
+    iconUrl: 'https://cdn-icons-png.flaticon.com/512/3054/3054889.png', // Coffee / Cafe
+    iconSize: [15, 15],
+});
+const mallIcon = new L.Icon({
+    iconUrl: 'https://cdn-icons-png.freepik.com/512/7835/7835563.png', // Shopping bag / mall
+    iconSize: [16, 16],
+});
+const commercialIcon = new L.Icon({
+    iconUrl: 'https://cdn-icons-png.flaticon.com/512/7991/7991011.png', // Storefront / commercial
+    iconSize: [16, 16],
 });
 const corporateIcon = new L.Icon({
     iconUrl: 'https://cdn-icons-png.flaticon.com/512/3061/3061341.png', // Office Building
-    iconSize: [24, 24],
+    iconSize: [16, 16],
 });
 const parkIcon = new L.Icon({
     iconUrl: 'https://cdn-icons-png.flaticon.com/512/427/427503.png', // Tree/Park
-    iconSize: [22, 22],
+    iconSize: [15, 15],
 });
 const residentialIcon = new L.Icon({
     iconUrl: 'https://cdn-icons-png.flaticon.com/512/619/619032.png', // House/Apartment
-    iconSize: [20, 20],
+    iconSize: [14, 14],
 });
 const metroIcon = new L.Icon({
     iconUrl: 'https://cdn-icons-png.flaticon.com/512/565/565350.png', // Train
-    iconSize: [20, 20],
+    iconSize: [15, 15],
 });
 const busIcon = new L.Icon({
     iconUrl: 'https://cdn-icons-png.flaticon.com/128/1178/1178850.png', // Bus
-    iconSize: [18, 18],
+    iconSize: [14, 14],
 });
 
 // Domain → competitor icon mapping
 const DOMAIN_ICON_MAP = {
-    gym: { icon: gymIcon, emoji: '🏋️', infraEmoji: '☕', infraLabel: 'LIFESTYLE' },
-    restaurant: { icon: restaurantIcon, emoji: '🍽️', infraEmoji: '🛍️', infraLabel: 'FOOTFALL' },
-    bank: { icon: bankIcon, emoji: '🏦', infraEmoji: '🏬', infraLabel: 'COMMERCIAL' },
-    retail: { icon: synergyIcon, emoji: '🛍️', infraEmoji: '🍿', infraLabel: 'SYNERGY' }
+    gym: { icon: gymIcon, rawUrl: 'https://cdn-icons-png.flaticon.com/512/2964/2964514.png', emoji: '🏋️', infraEmoji: '☕', infraLabel: 'Lifestyle', infraIcon: cafeIcon },
+    restaurant: { icon: restaurantIcon, rawUrl: 'https://cdn-icons-png.flaticon.com/512/3448/3448609.png', emoji: '🍽️', infraEmoji: '🛍️', infraLabel: 'Footfall', infraIcon: synergyIcon },
+    bank: { icon: bankIcon, rawUrl: 'https://cdn-icons-png.flaticon.com/512/2830/2830284.png', emoji: '🏦', infraEmoji: '🏬', infraLabel: 'Commercial', infraIcon: commercialIcon },
+    retail: { icon: retailIcon, rawUrl: 'https://cdn-icons-png.flaticon.com/512/3081/3081648.png', emoji: '🛍️', infraEmoji: '🍿', infraLabel: 'Synergy', infraIcon: synergyIcon },
 };
 
 const getIconForType = (type: LocationType) => {
@@ -584,15 +631,18 @@ const App: React.FC = () => {
         }
     }, [selectedPos, searchRadius]);
 
-    const performAnalysis = useCallback(async () => {
+    const performAnalysis = useCallback(async (overrideDomain?: string) => {
         if (!selectedPos) return;
         setIsAnalyzing(true);
         setAiInsight('Fetching real POI data from Google Places...');
 
-        try {
-            const domain = DOMAIN_CONFIG[activeDomain];
+        // Use overrideDomain if supplied (e.g. from chat), otherwise use active UI domain
+        const domainToUse = (overrideDomain || activeDomain) as keyof typeof DOMAIN_CONFIG;
 
-            if (activeDomain === 'gym') {
+        try {
+            const domain = DOMAIN_CONFIG[domainToUse];
+
+            if (domainToUse === 'gym') {
                 // ── GYM DOMAIN: Our advanced V2 scoring ─────────────────────
                 const intel = await getLocationIntelligence(
                     selectedPos[0],
@@ -609,7 +659,7 @@ const App: React.FC = () => {
                     parks: []
                 });
 
-                const realScores = calculateDomainScores(intel, activeDomain, searchRadius);
+                const realScores = calculateDomainScores(intel, domainToUse, searchRadius);
 
                 console.log('📊 SCORING V2 (GYM):', realScores);
                 setScores(realScores);
@@ -653,7 +703,7 @@ const App: React.FC = () => {
                 });
 
                 // Domain-specific scoring using dynamically loaded engine
-                const realScores = calculateDomainScores(intel, activeDomain, searchRadius);
+                const realScores = calculateDomainScores(intel, domainToUse, searchRadius);
 
                 console.log(`📊 SCORING (${domain.label}):`, realScores);
                 setScores(realScores);
@@ -668,7 +718,7 @@ const App: React.FC = () => {
                     setWardScores(prev => ({ ...prev, [selectedCluster]: { opportunityScore, finalScore, growthRate, demographicLoad: realScores.demographicLoad, competitorDensity: intel.competitors.total } }));
                 }
 
-                const recommendation = generateDomainRecommendation(intel, activeDomain);
+                const recommendation = generateDomainRecommendation(intel, domainToUse);
                 setAiInsight(recommendation);
             }
 
@@ -732,9 +782,8 @@ const App: React.FC = () => {
 
     const getVerdict = () => {
         if (!scores) return { text: "SELECT AREA", color: "text-slate-400" };
-        if (scores.total > 80) return { text: "GOLD MINE", color: "text-emerald-400" };
-        if (scores.total > 60) return { text: "STRONG", color: "text-indigo-400" };
-        if (scores.total > 40) return { text: "AVERAGE", color: "text-yellow-400" };
+        if (scores.total >= 70) return { text: "STRONG", color: "text-emerald-400" };
+        if (scores.total >= 45) return { text: "AVERAGE", color: "text-yellow-400" };
         return { text: "RISKY", color: "text-red-400" };
     };
 
@@ -760,6 +809,16 @@ const App: React.FC = () => {
 
             console.log('🚀 Starting agentic flow for:', message);
 
+            // ── Domain Detection (free keyword match, no API call) ──────────
+            const intent = parseSearchIntent(message);
+            const detectedDomain = (intent.hasDomain && intent.domain) ? intent.domain : activeDomain;
+
+            // Auto-switch domain in UI if chat detected a different one
+            if (intent.hasDomain && intent.domain && intent.domain !== activeDomain) {
+                console.log(`🔀 Chat switching domain: ${activeDomain} → ${intent.domain}`);
+                setActiveDomain(intent.domain as DomainId);
+            }
+
             // Build conversation context
             const recentContext = getRecentContext(updatedMessages).map(msg => ({
                 role: msg.role,
@@ -771,6 +830,8 @@ const App: React.FC = () => {
                 recentMessages: recentContext,
                 currentLocation: selectedPos || undefined,
                 selectedWard: selectedWard || undefined,
+                domain: detectedDomain,
+                radius: searchRadius,
                 scores: scores || undefined,
                 realPOIs: realPOIs,
                 wardClusters
@@ -800,21 +861,33 @@ const App: React.FC = () => {
 
                             if (action.payload.triggerAnalysis) {
                                 if (response.prefetchedIntel) {
-                                    // ✅ Chat already fetched intel — apply directly, skip re-fetch
+                                    // ✅ Chat already fetched intel — apply directly, skip re-fetch (zero extra API calls)
                                     console.log('♻️ Using prefetchedIntel — skipping performAnalysis()');
                                     const intel = response.prefetchedIntel;
                                     setRealPOIs({
-                                        gyms: intel.gyms?.places || [],
-                                        cafes: intel.cafesRestaurants?.places || [],
+                                        gyms: intel.gyms?.places || intel.competitors?.places || [],
+                                        cafes: intel.cafesRestaurants?.places || intel.infraSynergy?.places || [],
                                         corporates: intel.corporateOffices?.places || [],
                                         transit: intel.transitStations?.places || [],
                                         apartments: intel.apartments?.places || [],
                                         parks: []
                                     });
+                                    // Compute scores + strategy from prefetchedIntel (LocationIntelligence shape)
+                                    // Note: prefetchedIntel is always LocationIntelligence from chatOrchestrationService.
+                                    // generateDataDrivenRecommendation works for this format across all domains.
+                                    const cachedScores = calculateDomainScores(intel, detectedDomain as DomainId, searchRadius);
+                                    setScores(cachedScores);
+                                    setAiInsight(generateDataDrivenRecommendation(intel, cachedScores));
+
+                                    // For non-gym domains, fire performAnalysis in background to get
+                                    // the proper domain-specific scoring (no UI blocking, free re-use of cache)
+                                    if (detectedDomain !== 'gym') {
+                                        setTimeout(() => { performAnalysis(detectedDomain); }, 400);
+                                    }
                                 } else {
-                                    // Fallback: trigger fresh analysis
-                                    console.log('🔍 Triggering performAnalysis() — no prefetchedIntel');
-                                    setTimeout(() => { performAnalysis(); }, 300);
+                                    // Fallback: trigger fresh analysis with the detected domain
+                                    console.log('🔍 Triggering performAnalysis() — no prefetchedIntel, domain:', detectedDomain);
+                                    setTimeout(() => { performAnalysis(detectedDomain); }, 300);
                                 }
                             }
                         }
@@ -972,7 +1045,7 @@ const App: React.FC = () => {
                     {selectedPos && realPOIs.cafes.length > 0 && realPOIs.cafes.map((cafe, idx) => {
                         const domainMeta = DOMAIN_ICON_MAP[activeDomain];
                         return (
-                            <Marker key={`infra-${idx}`} position={[cafe.location.lat, cafe.location.lng]} icon={synergyIcon}>
+                            <Marker key={`infra-${idx}`} position={[cafe.location.lat, cafe.location.lng]} icon={domainMeta.infraIcon}>
                                 <Popup>
                                     <div className="p-2 min-w-[160px]">
                                         <div className="font-black text-slate-800 text-sm mb-1">{domainMeta.infraEmoji} {cafe.displayName}</div>
@@ -1136,15 +1209,19 @@ const App: React.FC = () => {
                 </MapContainer>
 
                 {/* Legend */}
-                <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-[40] pointer-events-none hidden md:block">
+                <div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-[40] pointer-events-none hidden md:block">
                     <div className="bg-white/90 backdrop-blur-md px-4 py-2.5 rounded-[1.25rem] shadow-xl border border-white/80 pointer-events-auto flex items-center gap-4">
                         <span className="text-[9px] font-black text-slate-800 uppercase tracking-widest border-r border-slate-200 pr-4">Legend</span>
                         <div className="flex items-center gap-4">
                             <div className="flex items-center gap-1.5" title={`${domain.competitorLabel} (Competitors)`}>
-                                <img src={DOMAIN_ICON_MAP[activeDomain].icon.options.iconUrl} className="w-4 h-4" alt="competitor" />
+                                <img src={DOMAIN_ICON_MAP[activeDomain].rawUrl} className="w-4 h-4" alt="competitor" />
                                 <span className="text-[9px] text-slate-600 font-bold">{domain.competitorLabel}</span>
                             </div>
-                            <div className="flex items-center gap-1.5" title="Corporate Offices">
+                            <div className="flex items-center gap-1.5" title={`${DOMAIN_ICON_MAP[activeDomain].infraLabel} (Synergy)`}>
+                                <img src={(DOMAIN_ICON_MAP[activeDomain].infraIcon.options as any).iconUrl} className="w-4 h-4" alt="infra" />
+                                <span className="text-[9px] text-slate-600 font-bold">{DOMAIN_ICON_MAP[activeDomain].infraLabel}</span>
+                            </div>
+                            <div className="flex items-center gap-1.5 border-l border-slate-200 pl-4 ml-1" title="Corporate Offices">
                                 <img src="https://cdn-icons-png.flaticon.com/512/3061/3061341.png" className="w-4 h-4" alt="office" />
                                 <span className="text-[9px] text-slate-600 font-bold">Office</span>
                             </div>
@@ -1157,7 +1234,7 @@ const App: React.FC = () => {
                                 <span className="text-[9px] text-slate-600 font-bold">Metro</span>
                             </div>
                             <div className="flex items-center gap-1.5" title="Bus Stops">
-                                <img src="https://cdn-icons-png.flaticon.com/512/3448/3448339.png" className="w-4 h-4" alt="bus" />
+                                <img src="https://cdn-icons-png.flaticon.com/128/1178/1178850.png" className="w-4 h-4" alt="bus" />
                                 <span className="text-[9px] text-slate-600 font-bold">Bus</span>
                             </div>
                             <div className="flex items-center gap-1.5 border-l border-slate-200 pl-4 ml-1">
@@ -1176,14 +1253,15 @@ const App: React.FC = () => {
                     </div>
                 </div>
 
-                <div className="absolute bottom-4 left-4 right-4 lg:right-auto lg:bottom-8 lg:left-8 z-[1000] glass-panel px-4 py-3 lg:px-8 lg:py-5 rounded-2xl lg:rounded-[2.5rem] shadow-2xl border border-white/80 flex items-center gap-3 lg:gap-5">
-                    <div className="flex items-center justify-center w-8 h-8 lg:w-12 lg:h-12 rounded-xl lg:rounded-2xl bg-slate-900 text-white shadow-xl">
-                        <span className="font-black text-xs lg:text-base">{searchRadius < 1000 ? '500' : '1k'}</span>
+                {/* Multi-Layer Scanning Widget (Moved to Top Right HUD) */}
+                <div className="absolute top-24 right-4 lg:right-6 z-[1000] glass-panel px-3 py-2.5 rounded-xl shadow-lg border border-white/60 flex items-center gap-3 pointer-events-none transition-all duration-300">
+                    <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-slate-900 text-white shadow-md">
+                        <span className="font-black text-xs">{searchRadius < 1000 ? '500' : '1k'}</span>
                     </div>
-                    <div className="flex-1">
-                        <div className="text-[11px] lg:text-sm font-black text-slate-900 leading-tight">Multi-Layer Scanning</div>
-                        <div className="text-[8px] lg:text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-0.5">
-                            Found: {competitors} {domain.competitorLabel}, {demandGenerators} Generators
+                    <div className="flex-1 pr-2">
+                        <div className="text-[10px] font-black text-slate-800 leading-tight">Multi-Layer Scan</div>
+                        <div className="text-[9px] text-slate-500 font-bold uppercase tracking-widest mt-0.5">
+                            Found: {competitors} {domain.competitorLabel}, {demandGenerators} Gens
                         </div>
                     </div>
                 </div>
@@ -1202,7 +1280,7 @@ const App: React.FC = () => {
                         <div className="flex-shrink-0 flex items-center gap-2">
                             <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-600 to-purple-600 flex items-center justify-center text-white font-black shadow-lg">G</div>
                             <div className="hidden sm:block">
-                                <h1 className="text-sm font-black text-slate-900 tracking-tight leading-none">Geo-Intel <span className="text-indigo-600">V8</span></h1>
+                                <h1 className="text-sm font-black text-slate-900 tracking-tight leading-none">Geo-Intel <span className="text-indigo-600" style={{ fontSize: '0.6rem' }}>beta</span></h1>
                             </div>
                         </div>
 
@@ -1401,8 +1479,19 @@ const App: React.FC = () => {
                                 <p className="text-[10px] font-bold text-slate-400 mt-1">Select an area to analyze</p>
                             )}
                         </div>
-                        <button onClick={() => setShowHeatmap(!showHeatmap)} className={`p-2 rounded-xl transition-all border ${showHeatmap ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-slate-100 text-slate-400 border-slate-200'}`} title="Toggle Heatmap">
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" /></svg>
+                        <button
+                            onClick={() => {
+                                setChatOpen(true);
+                                const domainName = DOMAIN_ICON_MAP[activeDomain].infraLabel === 'LIFESTYLE' ? 'Gym' :
+                                    DOMAIN_ICON_MAP[activeDomain].infraLabel === 'FOOTFALL' ? 'Restaurant' :
+                                        DOMAIN_ICON_MAP[activeDomain].infraLabel === 'COMMERCIAL' ? 'Bank' : 'Retail store';
+                                handleUserMessage(`Suggest 3 highly creative, non-traditional marketing or business ideas for a new ${domainName} in this specific location based on the current data.`);
+                            }}
+                            className="p-2 rounded-xl transition-all border bg-amber-50 text-amber-600 border-amber-200 hover:bg-amber-100 hover:shadow-md group relative"
+                            title="Suggest Ideas"
+                        >
+                            <span className="text-sm">💡</span>
+                            <span className="absolute -bottom-8 right-0 opacity-0 group-hover:opacity-100 bg-slate-800 text-white text-[9px] font-bold px-2 py-1 rounded whitespace-nowrap transition-opacity pointer-events-none">Suggest Ideas</span>
                         </button>
                     </header>
 
