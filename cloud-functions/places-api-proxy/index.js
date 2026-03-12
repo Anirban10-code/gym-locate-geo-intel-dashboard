@@ -20,31 +20,27 @@ functions.http('placesApiProxy', async (req, res) => {
     }
 
     // Get API key from environment (stored securely)
-    const apiKey = process.env.VITE_GOOGLE_MAPS_API_KEY;
+    const apiKey = process.env.GOOGLE_MAPS_API_KEY;
     if (!apiKey) {
       return res.status(500).json({ error: 'API key not configured' });
     }
 
-    // Construct URL safely
-    const url = new URL(`https://places.googleapis.com/${endpoint}`);
-    url.searchParams.append('key', apiKey);
-    
-    // Add user params (whitelist allowed params for security)
-    const allowedParams = ['query', 'location', 'radius', 'type', 'region', 'language'];
-    Object.keys(params || {}).forEach(key => {
-      if (allowedParams.includes(key)) {
-        url.searchParams.append(key, params[key]);
-      }
-    });
+    const { endpoint, body: reqBody, fieldMask } = req.body;
+
+    // Construct URL
+    const url = `https://places.googleapis.com/${endpoint}`;
 
     console.log(`Calling Places API: ${endpoint}`);
 
     // Call Google Places API
-    const response = await fetch(url.toString(), {
-      method: 'GET',
+    const response = await fetch(url, {
+      method: 'POST',
       headers: {
-        'Content-Type': 'application/json'
-      }
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': apiKey,
+        'X-Goog-FieldMask': fieldMask || 'places.id,places.displayName,places.location,places.types,places.businessStatus'
+      },
+      body: JSON.stringify(reqBody || {})
     });
 
     const data = await response.json();

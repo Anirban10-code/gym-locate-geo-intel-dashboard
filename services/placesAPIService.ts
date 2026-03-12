@@ -21,8 +21,7 @@ import {
     deduplicatedFetch,
     AggregatedIntel,
 } from './placesCache';
-
-const GOOGLE_PLACES_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+import { PLACES_PROXY_URL, USE_DIRECT_API, GOOGLE_PLACES_API_KEY } from './apiConfig';
 
 // ── Field Masks ───────────────────────────────────────────────────────────────
 // Basic SKU: charged at lower rate — use for categories where rating/price
@@ -126,7 +125,7 @@ export async function nearbySearch(
     return result;
 }
 
-/** Single HTTP request to Places API searchNearby */
+/** Single HTTP request to Places API searchNearby (via proxy or direct) */
 async function fetchSingleZone(
     lat: number,
     lng: number,
@@ -135,8 +134,6 @@ async function fetchSingleZone(
     primaryOnly: boolean,
     fieldMask: string
 ): Promise<PlaceResult[]> {
-    const url = 'https://places.googleapis.com/v1/places:searchNearby';
-
     const typeKey = primaryOnly ? 'includedPrimaryTypes' : 'includedTypes';
     const body = {
         [typeKey]: placeTypes,
@@ -150,23 +147,41 @@ async function fetchSingleZone(
         rankPreference: 'DISTANCE',
     };
 
-    const headers = {
-        'Content-Type': 'application/json',
-        'X-Goog-Api-Key': GOOGLE_PLACES_API_KEY || '',
-        'X-Goog-FieldMask': fieldMask,
-    };
-
     try {
-        const response = await fetch(url, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(body),
-        });
+        let response: Response;
+
+        if (USE_DIRECT_API) {
+            // Local dev: call Google directly with key in header
+            response = await fetch('https://places.googleapis.com/v1/places:searchNearby', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Goog-Api-Key': GOOGLE_PLACES_API_KEY || '',
+                    'X-Goog-FieldMask': fieldMask,
+                },
+                body: JSON.stringify(body),
+            });
+        } else {
+            // Production: route through Cloud Function proxy (key stays server-side)
+            response = await fetch(PLACES_PROXY_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    endpoint: 'v1/places:searchNearby',
+                    body,
+                    fieldMask,
+                }),
+            });
+            // Proxy wraps response in { success, data } — unwrap it
+            if (response.ok) {
+                const wrapper = await response.json();
+                return (wrapper.data?.places || []).map(mapPlace);
+            }
+        }
 
         if (!response.ok) {
             const errorText = await response.text();
             console.error(`❌ Places API error: ${response.status}`, errorText);
-            console.error(`API Key configured:`, GOOGLE_PLACES_API_KEY ? 'YES' : 'NO (MISSING!)');
             return [];
         }
 
@@ -203,14 +218,6 @@ export async function textSearch(
     lat?: number,
     lng?: number
 ): Promise<PlaceResult[]> {
-    const url = 'https://places.googleapis.com/v1/places:searchText';
-
-    const headers = {
-        'Content-Type': 'application/json',
-        'X-Goog-Api-Key': GOOGLE_PLACES_API_KEY || '',
-        'X-Goog-FieldMask': ADVANCED_FIELD_MASK,
-    };
-
     const body: any = { textQuery, maxResultCount: 20 };
 
     if (lat && lng) {
@@ -220,7 +227,34 @@ export async function textSearch(
     }
 
     try {
-        const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+        let response: Response;
+
+        if (USE_DIRECT_API) {
+            response = await fetch('https://places.googleapis.com/v1/places:searchText', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Goog-Api-Key': GOOGLE_PLACES_API_KEY || '',
+                    'X-Goog-FieldMask': ADVANCED_FIELD_MASK,
+                },
+                body: JSON.stringify(body),
+            });
+        } else {
+            response = await fetch(PLACES_PROXY_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    endpoint: 'v1/places:searchText',
+                    body,
+                    fieldMask: ADVANCED_FIELD_MASK,
+                }),
+            });
+            if (response.ok) {
+                const wrapper = await response.json();
+                return (wrapper.data?.places || []).map(mapPlace);
+            }
+        }
+
         if (!response.ok) throw new Error(`Text search error: ${response.status}`);
         const data = await response.json();
         return (data.places || []).map(mapPlace);
