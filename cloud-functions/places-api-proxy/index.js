@@ -25,7 +25,7 @@ functions.http('placesApiProxy', async (req, res) => {
       return res.status(500).json({ error: 'API key not configured' });
     }
 
-    const { endpoint, body: reqBody, fieldMask } = req.body;
+    const { body: reqBody, fieldMask } = req.body;
 
     // Construct URL
     const url = `https://places.googleapis.com/${endpoint}`;
