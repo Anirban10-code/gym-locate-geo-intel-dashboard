@@ -230,6 +230,42 @@ export async function textSearch(
     }
 }
 
+/**
+ * Geocode a location name to lat/lng coordinates using Places text search.
+ * Appends ", Bangalore" to bias results toward the city.
+ * Falls back to Bangalore city centre if nothing is found.
+ */
+export async function geocodeLocation(
+    locationName: string
+): Promise<{ lat: number; lng: number } | null> {
+    const url = 'https://places.googleapis.com/v1/places:searchText';
+    const query = locationName.toLowerCase().includes('bangalore')
+        ? locationName
+        : `${locationName}, Bangalore`;
+
+    const body = { textQuery: query, maxResultCount: 1 };
+    const headers = {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': GOOGLE_PLACES_API_KEY || '',
+        'X-Goog-FieldMask': 'places.location,places.displayName',
+    };
+
+    try {
+        const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+        if (!response.ok) return null;
+        const data = await response.json();
+        const first = data.places?.[0];
+        if (first?.location) {
+            console.log(`📍 Geocoded "${locationName}" → [${first.location.latitude}, ${first.location.longitude}]`);
+            return { lat: first.location.latitude, lng: first.location.longitude };
+        }
+    } catch (err) {
+        console.error('Geocode failed:', err);
+    }
+    // Fallback: Bangalore city centre
+    return { lat: 12.9716, lng: 77.5946 };
+}
+
 // ── Location Intelligence ─────────────────────────────────────────────────────
 
 export interface LocationIntelligence {

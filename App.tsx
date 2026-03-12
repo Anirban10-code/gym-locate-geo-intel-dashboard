@@ -15,6 +15,7 @@ import { calculateDomainScores } from './services/scoringEngine';
 import { ChatInterface } from './components/ChatInterface';
 import { addMessage, loadConversationHistory, clearConversationHistory, getRecentContext, extractLocationMentions, Message } from './services/conversationService';
 import { processUserQuery } from './services/chatOrchestrationService';
+import { TutorialOverlay } from './components/TutorialOverlay';
 
 /**
  * GYM-LOCATE: Geo-Intel Command Center (v8)
@@ -111,10 +112,10 @@ const busIcon = new L.Icon({
 
 // Domain → competitor icon mapping
 const DOMAIN_ICON_MAP = {
-    gym: { icon: gymIcon, rawUrl: 'https://cdn-icons-png.flaticon.com/512/2964/2964514.png', emoji: '🏋️', infraEmoji: '☕', infraLabel: 'Lifestyle', infraIcon: cafeIcon },
-    restaurant: { icon: restaurantIcon, rawUrl: 'https://cdn-icons-png.flaticon.com/512/3448/3448609.png', emoji: '🍽️', infraEmoji: '🛍️', infraLabel: 'Footfall', infraIcon: synergyIcon },
-    bank: { icon: bankIcon, rawUrl: 'https://cdn-icons-png.flaticon.com/512/2830/2830284.png', emoji: '🏦', infraEmoji: '🏬', infraLabel: 'Commercial', infraIcon: commercialIcon },
-    retail: { icon: retailIcon, rawUrl: 'https://cdn-icons-png.flaticon.com/512/3081/3081648.png', emoji: '🛍️', infraEmoji: '🍿', infraLabel: 'Synergy', infraIcon: synergyIcon },
+    gym: { icon: gymIcon, rawUrl: 'https://cdn-icons-png.flaticon.com/512/2964/2964514.png', emoji: '🏋️', competitorLabel: 'Gyms', infraEmoji: '☕', infraLabel: 'Lifestyle', infraIcon: cafeIcon },
+    restaurant: { icon: restaurantIcon, rawUrl: 'https://cdn-icons-png.flaticon.com/512/3448/3448609.png', emoji: '🍽️', competitorLabel: 'Restaurants', infraEmoji: '🛍️', infraLabel: 'Footfall', infraIcon: synergyIcon },
+    bank: { icon: bankIcon, rawUrl: 'https://cdn-icons-png.flaticon.com/512/2830/2830284.png', emoji: '🏦', competitorLabel: 'Banks', infraEmoji: '🏬', infraLabel: 'Commercial', infraIcon: commercialIcon },
+    retail: { icon: retailIcon, rawUrl: 'https://cdn-icons-png.flaticon.com/512/3081/3081648.png', emoji: '🛍️', competitorLabel: 'Stores', infraEmoji: '🍿', infraLabel: 'Synergy', infraIcon: synergyIcon },
 };
 
 const getIconForType = (type: LocationType) => {
@@ -185,7 +186,7 @@ const MapZoomController = ({ center, zoom }: { center: [number, number] | null, 
 const BANGALORE_CENTER = { lat: 12.9716, lng: 77.5946 };
 
 // Ward layer component
-const WardLayer = ({ onWardClick }: { onWardClick: (lat: number, lng: number, wardName: string) => void }) => {
+const WardLayer = ({ onWardClick, activeDomain }: { onWardClick: (lat: number, lng: number, wardName: string) => void, activeDomain: DomainId }) => {
     const [wardsGeoJSON, setWardsGeoJSON] = useState<any>(null);
     const [wardData, setWardData] = useState<Record<string, any>>({});
 
@@ -244,11 +245,11 @@ const WardLayer = ({ onWardClick }: { onWardClick: (lat: number, lng: number, wa
                             <span class="font-black text-emerald-600">${(data.finalScore * 100).toFixed(1)}%</span>
                         </div>
                         <div class="flex justify-between">
-                            <span class="text-slate-600 font-bold">Gyms:</span>
+                            <span class="text-slate-600 font-bold">${DOMAIN_ICON_MAP[activeDomain]?.competitorLabel || 'Competitors'}:</span>
                             <span class="font-black">${data.gymCount}</span>
                         </div>
                         <div class="flex justify-between">
-                            <span class="text-slate-600 font-bold">Cafes:</span>
+                            <span class="text-slate-600 font-bold">${DOMAIN_ICON_MAP[activeDomain]?.infraLabel || 'Synergy'}:</span>
                             <span class="font-black">${data.cafeCount}</span>
                         </div>
                     </div>
@@ -864,6 +865,11 @@ const App: React.FC = () => {
                                     // ✅ Chat already fetched intel — apply directly, skip re-fetch (zero extra API calls)
                                     console.log('♻️ Using prefetchedIntel — skipping performAnalysis()');
                                     const intel = response.prefetchedIntel;
+
+                                    // Detect shape: LocationIntelligence (gym) has `gyms`,
+                                    //               DomainLocationIntelligence (other) has `competitors`
+                                    const isGymShape = 'gyms' in intel;
+
                                     setRealPOIs({
                                         gyms: intel.gyms?.places || intel.competitors?.places || [],
                                         cafes: intel.cafesRestaurants?.places || intel.infraSynergy?.places || [],
@@ -872,17 +878,15 @@ const App: React.FC = () => {
                                         apartments: intel.apartments?.places || [],
                                         parks: []
                                     });
-                                    // Compute scores + strategy from prefetchedIntel (LocationIntelligence shape)
-                                    // Note: prefetchedIntel is always LocationIntelligence from chatOrchestrationService.
-                                    // generateDataDrivenRecommendation works for this format across all domains.
+
                                     const cachedScores = calculateDomainScores(intel, detectedDomain as DomainId, searchRadius);
                                     setScores(cachedScores);
-                                    setAiInsight(generateDataDrivenRecommendation(intel, cachedScores));
 
-                                    // For non-gym domains, fire performAnalysis in background to get
-                                    // the proper domain-specific scoring (no UI blocking, free re-use of cache)
-                                    if (detectedDomain !== 'gym') {
-                                        setTimeout(() => { performAnalysis(detectedDomain); }, 400);
+                                    // Call the correct recommendation function based on data shape
+                                    if (isGymShape) {
+                                        setAiInsight(generateDataDrivenRecommendation(intel, cachedScores));
+                                    } else {
+                                        setAiInsight(generateDomainRecommendation(intel, detectedDomain));
                                     }
                                 } else {
                                     // Fallback: trigger fresh analysis with the detected domain
@@ -941,7 +945,7 @@ const App: React.FC = () => {
                     />
 
                     {/* Ward Boundaries Layer */}
-                    <WardLayer onWardClick={handleWardClick} />
+                    <WardLayer onWardClick={handleWardClick} activeDomain={activeDomain as DomainId} />
 
                     {/* {showHeatmap && <HeatmapLayer locations={MOCK_LOCATIONS} />} */}
                     <MapEvents onMapClick={handleMapClick} />
@@ -1174,11 +1178,11 @@ const App: React.FC = () => {
                                                 </span>
                                             </div>
                                             <div className="flex justify-between items-center">
-                                                <span className="text-[9px] font-bold text-slate-600 uppercase">Existing Gyms</span>
+                                                <span className="text-[9px] font-bold text-slate-600 uppercase">{domain.competitorLabel}</span>
                                                 <span className="text-xs font-black text-slate-700">{displayGyms}</span>
                                             </div>
                                             <div className="flex justify-between items-center">
-                                                <span className="text-[9px] font-bold text-slate-600 uppercase">Cafes/Lifestyle</span>
+                                                <span className="text-[9px] font-bold text-slate-600 uppercase">{DOMAIN_ICON_MAP[activeDomain].infraLabel}</span>
                                                 <span className="text-xs font-black text-slate-700">{displayCafes}</span>
                                             </div>
                                             {isAnalyzed && (
@@ -1479,20 +1483,7 @@ const App: React.FC = () => {
                                 <p className="text-[10px] font-bold text-slate-400 mt-1">Select an area to analyze</p>
                             )}
                         </div>
-                        <button
-                            onClick={() => {
-                                setChatOpen(true);
-                                const domainName = DOMAIN_ICON_MAP[activeDomain].infraLabel === 'LIFESTYLE' ? 'Gym' :
-                                    DOMAIN_ICON_MAP[activeDomain].infraLabel === 'FOOTFALL' ? 'Restaurant' :
-                                        DOMAIN_ICON_MAP[activeDomain].infraLabel === 'COMMERCIAL' ? 'Bank' : 'Retail store';
-                                handleUserMessage(`Suggest 3 highly creative, non-traditional marketing or business ideas for a new ${domainName} in this specific location based on the current data.`);
-                            }}
-                            className="p-2 rounded-xl transition-all border bg-amber-50 text-amber-600 border-amber-200 hover:bg-amber-100 hover:shadow-md group relative"
-                            title="Suggest Ideas"
-                        >
-                            <span className="text-sm">💡</span>
-                            <span className="absolute -bottom-8 right-0 opacity-0 group-hover:opacity-100 bg-slate-800 text-white text-[9px] font-bold px-2 py-1 rounded whitespace-nowrap transition-opacity pointer-events-none">Suggest Ideas</span>
-                        </button>
+                        <TutorialOverlay />
                     </header>
 
 
@@ -1573,11 +1564,11 @@ const App: React.FC = () => {
                     </div>
 
                     {/* Metrics Chart */}
-                    <div className="bg-slate-50/50 p-3 lg:p-4 rounded-2xl lg:rounded-3xl border border-slate-100 shadow-inner h-40 lg:h-48 shrink-0" style={{ minWidth: '300px' }}>
+                    <div className="bg-slate-50/50 p-3 lg:p-4 rounded-2xl lg:rounded-3xl border border-slate-100 shadow-inner h-40 lg:h-48 shrink-0 w-full">
                         <ResponsiveContainer width="100%" height="100%">
-                            <BarChart data={chartData} layout="vertical" margin={{ left: 0, right: 20 }}>
+                            <BarChart data={chartData} layout="vertical" margin={{ left: 0, right: 30 }}>
                                 <XAxis type="number" hide domain={[0, 100]} />
-                                <YAxis dataKey="name" type="category" width={90} style={{ fontSize: '8px', fontWeight: '900', fill: '#64748b' }} />
+                                <YAxis dataKey="name" type="category" width={95} style={{ fontSize: '8px', fontWeight: '900', fill: '#64748b' }} />
                                 <Tooltip cursor={{ fill: 'transparent' }} />
                                 <Bar dataKey="score" radius={[0, 6, 6, 0]} barSize={16}>
                                     {chartData.map((entry, index) => <Cell key={`c-${index}`} fill={entry.color} />)}
