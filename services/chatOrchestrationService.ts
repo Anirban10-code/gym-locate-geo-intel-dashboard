@@ -20,6 +20,9 @@ import {
     PlaceResult
 } from './placesAPIService';
 import { ScoringMatrix } from '../types';
+import { GEMINI_PROXY_URL, USE_DIRECT_API } from './apiConfig';
+
+const DIRECT_API_KEY = import.meta.env.VITE_GEMINI_API_KEY || import.meta.env.VITE_API_KEY || '';
 
 // ============================================
 // Types & Interfaces
@@ -85,16 +88,13 @@ export async function processUserQuery(
     context: ChatContext
 ): Promise<ChatResponse> {
 
-    const apiKey = import.meta.env.VITE_GEMINI_API_KEY || import.meta.env.VITE_API_KEY || '';
-    if (!apiKey) {
+    if (USE_DIRECT_API && !DIRECT_API_KEY) {
         return {
             text: "⚠️ Gemini API key not configured. Please add VITE_GEMINI_API_KEY to .env.local",
             usedPlacesAPI: false,
             usedGemini: false
         };
     }
-
-    const ai = new GoogleGenAI({ apiKey });
 
     // ============================================
     // Step 1: Build agentic system prompt
@@ -110,16 +110,26 @@ export async function processUserQuery(
         // Step 2: First Gemini call - detect intent
         // ============================================
 
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: fullPrompt,
-            config: {
-                temperature: 0.3,
-                maxOutputTokens: 1500
-            }
-        });
+        let geminiText = '';
+        
+        if (USE_DIRECT_API) {
+            const ai = new GoogleGenAI({ apiKey: DIRECT_API_KEY });
+            const response = await ai.models.generateContent({
+                model: 'gemini-2.5-flash',
+                contents: fullPrompt,
+                config: { temperature: 0.3, maxOutputTokens: 1500 }
+            });
+            geminiText = response.text || '';
+        } else {
+            const resp = await fetch(GEMINI_PROXY_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ messages: [{ role: 'user', content: fullPrompt }] }),
+            });
+            const data = await resp.json();
+            geminiText = data.text || '';
+        }
 
-        const geminiText = response.text || '';
         console.log('💬 Gemini response:', geminiText.substring(0, 200) + '...');
 
         // ============================================
@@ -160,16 +170,25 @@ You are provided with a pre-computed "GEO-GROUNDED STRATEGY" above.
 DO NOT re-calculate or invent your own strategy from scratch. 
 Simply summarize this existing strategic analysis naturally for the user. Be concise, highlight the key numbers, and seamlessly weave in the provided tactical recommendation.`;
 
-            const finalResponse = await ai.models.generateContent({
-                model: 'gemini-2.5-flash',
-                contents: contextualPrompt,
-                config: {
-                    temperature: 0.4,
-                    maxOutputTokens: 2048
-                }
-            });
-
-            const finalText = finalResponse.text || 'Analysis complete.';
+            let finalText = '';
+            
+            if (USE_DIRECT_API) {
+                const ai = new GoogleGenAI({ apiKey: DIRECT_API_KEY });
+                const finalResponse = await ai.models.generateContent({
+                    model: 'gemini-2.5-flash',
+                    contents: contextualPrompt,
+                    config: { temperature: 0.4, maxOutputTokens: 2048 }
+                });
+                finalText = finalResponse.text || 'Analysis complete.';
+            } else {
+                const resp = await fetch(GEMINI_PROXY_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ messages: [{ role: 'user', content: contextualPrompt }] }),
+                });
+                const data = await resp.json();
+                finalText = data.text || 'Analysis complete.';
+            }
 
             // Determine if placesData is a LocationIntelligence object (analyze/get_intelligence)
             const isLocationIntel =
