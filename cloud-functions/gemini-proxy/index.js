@@ -1,5 +1,5 @@
 const functions = require('@google-cloud/functions-framework');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { GoogleGenAI } = require('@google/genai');
 
 functions.http('geminiProxy', async (req, res) => {
   // Enable CORS
@@ -13,11 +13,7 @@ functions.http('geminiProxy', async (req, res) => {
   }
 
   try {
-    const { messages, systemPrompt } = req.body;
-
-    if (!messages || !Array.isArray(messages)) {
-      return res.status(400).json({ error: 'Invalid request: messages array required' });
-    }
+    const { messages, contents, config, systemPrompt } = req.body;
 
     // Get API key from environment (stored securely in Cloud Run)
     const apiKey = process.env.GEMINI_API_KEY;
@@ -25,38 +21,36 @@ functions.http('geminiProxy', async (req, res) => {
       return res.status(500).json({ error: 'API key not configured' });
     }
 
-    // Initialize Gemini with secure API key
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ 
-      model: 'gemini-1.5-pro-latest'
-    });
+    // Initialize Gemini with the actual modern `@google/genai` sdk the frontend uses
+    const ai = new GoogleGenAI({ apiKey });
 
-    // Format messages for Gemini
-    const formattedMessages = messages.map(msg => ({
-      role: msg.role === 'user' ? 'user' : 'model',
-      parts: [{ text: msg.content }]
-    }));
+    // Ensure we handle both the simple text prompt format and the complex agentic format
+    if (messages) {
+      // Handle the simple text format we added in chatOrchestrationService
+      const promptText = Array.isArray(messages) ? messages[messages.length - 1]?.content : messages;
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: promptText || '',
+        config: {
+            temperature: 0.3, 
+            maxOutputTokens: 2048
+        }
+      });
+      res.json({ success: true, text: response.text || '' });
 
-    // Build system prompt
-    const systemMsg = systemPrompt || 'You are a helpful AI assistant for geolocation analysis.';
+    } else if (contents) {
+      // Handle direct forwarding of raw `generateContent` props (used by geminiService.ts)
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents,
+        config: config || {}
+      });
+      // Send back exactly what the frontend wrapper expects
+      res.json(response);
 
-    // Call Gemini API
-    const chat = model.startChat({
-      history: formattedMessages.slice(0, -1),
-      generationConfig: {
-        maxOutputTokens: 2048,
-        temperature: 0.7,
-      }
-    });
-
-    const response = await chat.sendMessage(formattedMessages[formattedMessages.length - 1].parts[0].text);
-    const responseText = response.response.text();
-
-    res.json({ 
-      success: true,
-      text: responseText,
-      usedGemini: true 
-    });
+    } else {
+      res.status(400).json({ error: 'Must provide either messages or contents' });
+    }
 
   } catch (error) {
     console.error('Gemini API Error:', error);
