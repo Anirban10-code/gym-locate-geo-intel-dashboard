@@ -468,8 +468,7 @@ function formatPlacesResults(
             formatted += `- Competition Level: ${intel.competitionLevel}\n`;
             formatted += `- Market Opportunity: ${intel.marketGap}\n\n`;
 
-            const scores = calculateDomainScores(intel, domain, searchRadius);
-            const recommendation = generateDomainRecommendation(intel, domain, scores);
+            const recommendation = generateDomainRecommendation(intel, domain);
             formatted += `**Strategic Recommendation:**\n${recommendation}\n`;
         }
 
