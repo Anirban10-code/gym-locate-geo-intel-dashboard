@@ -337,8 +337,9 @@ const App: React.FC = () => {
     const searchRecognitionRef = useRef<any>(null);
     const searchInputRef = useRef<HTMLInputElement>(null);
 
-    // DOMAIN: Active analysis domain (gym / restaurant / bank)
     const [activeDomain, setActiveDomain] = useState<DomainId>('gym');
+    const [mobileView, setMobileView] = useState<'map' | 'analytics' | 'chat'>('map');
+    const [sheetState, setSheetState] = useState<'peek' | 'half' | 'full'>('half');
 
     // CUSTOM PARAMETERS: user-defined scoring factors
     interface CustomParam {
@@ -1434,7 +1435,7 @@ const App: React.FC = () => {
                 </div>
 
                 {/* Multi-Layer Scanning Widget (Moved to Top Right HUD) */}
-                <div className="absolute top-24 right-4 lg:right-6 z-[1000] glass-panel px-3 py-2.5 rounded-xl shadow-lg border border-white/60 flex items-center gap-3 pointer-events-none transition-all duration-300">
+                <div className="absolute top-24 right-4 lg:right-6 z-[1000] glass-panel px-3 py-2.5 rounded-xl shadow-lg border border-white/60 flex items-center gap-3 pointer-events-none transition-all duration-300 hidden md:flex">
                     <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-slate-900 text-white shadow-md">
                         <span className="font-black text-xs">{searchRadius < 1000 ? '500' : '1k'}</span>
                     </div>
@@ -1452,7 +1453,8 @@ const App: React.FC = () => {
             {/* ========================================== */}
 
             {/* TOP BAR: Title & Search (Dynamic & Floating) */}
-            <div className={`absolute top-4 z-30 w-[90vw] md:w-[600px] flex flex-col gap-2 pointer-events-none transition-all duration-500 ease-in-out ${showRightSidebar ? 'left-[calc(50%+160px)] -translate-x-1/2' : 'left-1/2 -translate-x-1/2'}`}>
+            {/* TOP BAR: Title & Search (Dynamic & Floating) */}
+            <div className={`absolute top-4 z-30 w-[95vw] md:w-[600px] flex flex-col gap-2 pointer-events-none transition-all duration-500 ease-in-out ${showRightSidebar ? 'lg:left-[calc(50%+160px)] lg:-translate-x-1/2' : 'left-1/2 -translate-x-1/2'} left-1/2 -translate-x-1/2`}>
                 {/* Search Bar Container */}
                 <div className="backdrop-blur-xl bg-white/80 shadow-2xl border border-white/50 rounded-2xl p-3 flex flex-col pointer-events-auto transition-all">
                     <div className="flex items-center justify-between gap-3">
@@ -1634,12 +1636,26 @@ const App: React.FC = () => {
                 )}
             </div>
 
-            {/* LEFT SIDEBAR: Intelligence Panel */}
-            <div className={`absolute left-0 top-0 bottom-0 w-[320px] max-w-[90vw] z-[40] transition-transform duration-500 ease-in-out flex flex-col pointer-events-none ${showRightSidebar ? 'translate-x-0' : '-translate-x-full'}`}>
-                {/* Toggle Button for Right Sidebar (attached to the edge) */}
+            {/* LEFT SIDEBAR: Intelligence Panel / Bottom Sheet */}
+            <div className={`absolute bottom-0 left-0 right-0 lg:left-0 lg:top-0 lg:bottom-0 w-full lg:w-[320px] max-w-full lg:max-w-[90vw] z-[150] lg:z-[40] transition-all duration-500 ease-in-out flex flex-col pointer-events-none ${
+                // Mobile visibility / Height mapping
+                mobileView === 'analytics'
+                    ? (sheetState === 'full' ? 'h-[92dvh]' : sheetState === 'half' ? 'h-[45vh]' : 'h-[60px]')
+                    : 'max-lg:translate-y-full max-lg:opacity-0'
+            } ${
+                // Desktop visibility
+                showRightSidebar ? 'lg:translate-x-0' : 'lg:-translate-x-full'
+            }`}>
+                {/* Mobile Drag Handle */}
+                <div className="lg:hidden w-full flex flex-col items-center pt-2 pb-1 bg-white/95 backdrop-blur-xl border-t border-x border-slate-200/60 rounded-t-[2rem] pointer-events-auto"
+                    onClick={() => setSheetState(prev => prev === 'half' ? 'full' : prev === 'full' ? 'half' : 'half')}>
+                    <div className="w-12 h-1.5 bg-slate-200 rounded-full mb-1"></div>
+                </div>
+
+                {/* Toggle Button for Right Sidebar (attached to the edge) - Desktop only */}
                 <button
                     onClick={() => setShowRightSidebar(!showRightSidebar)}
-                    className="absolute -right-10 top-1/2 -translate-y-1/2 bg-white/95 backdrop-blur pointer-events-auto p-1.5 rounded-r-xl shadow-[5px_0_15px_rgba(0,0,0,0.1)] border border-l-0 border-slate-200 text-slate-600 hover:text-indigo-600 transition-colors z-50 flex items-center justify-center"
+                    className="absolute -right-10 top-1/2 -translate-y-1/2 bg-white/95 backdrop-blur pointer-events-auto p-1.5 rounded-r-xl shadow-[5px_0_15px_rgba(0,0,0,0.1)] border border-l-0 border-slate-200 text-slate-600 hover:text-indigo-600 transition-colors z-50 hidden lg:flex items-center justify-center"
                 >
                     <svg className={`w-5 h-5 transition-transform ${showRightSidebar ? '' : 'rotate-180'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M15 19l-7-7 7-7" />
@@ -1647,10 +1663,17 @@ const App: React.FC = () => {
                 </button>
 
                 {/* Sidebar Content Container */}
-                <div className="flex-1 bg-white/95 backdrop-blur-2xl shadow-[10px_0_30px_rgba(0,0,0,0.1)] rounded-r-[2rem] border-r border-slate-200/60 p-5 overflow-y-auto custom-scrollbar pointer-events-auto flex flex-col gap-5">
-                    <header className="flex items-center justify-between pb-3 border-b border-slate-200/50 pt-2">
-                        <div>
-                            <h2 className="text-lg font-black text-slate-900 tracking-tight">Intelligence Panel</h2>
+                <div className={`flex-1 bg-white/95 lg:backdrop-blur-2xl shadow-[0_-10px_30px_rgba(0,0,0,0.1)] lg:shadow-[10px_0_30px_rgba(0,0,0,0.1)] lg:rounded-r-[2rem] border-x lg:border-l-0 lg:border-r border-slate-200/60 p-5 overflow-y-auto custom-scrollbar pointer-events-auto flex flex-col gap-5 ${mobileView === 'analytics' ? 'pb-24 pt-4' : ''}`}>
+                    <header className="flex items-center justify-between pb-3 border-b border-slate-200/50 pt-1">
+                        <div className="flex-1">
+                            <div className="flex items-center justify-between lg:block">
+                                <h2 className="text-lg font-black text-slate-900 tracking-tight">Intelligence Panel</h2>
+                                <div className="lg:hidden flex gap-2">
+                                    <button onClick={() => setSheetState(sheetState === 'full' ? 'half' : 'full')} className="text-slate-400 p-1">
+                                        {sheetState === 'full' ? '▼' : '▲'}
+                                    </button>
+                                </div>
+                            </div>
                             {(selectedCluster || selectedWard) ? (
                                 <div className="mt-1 inline-flex items-center gap-1.5 bg-indigo-50 border border-indigo-100 px-2.5 py-1 rounded-md">
                                     <span className="text-[10px] font-black text-indigo-700">📍 {selectedWard || wardClusters.find(c => c.id === selectedCluster)?.wardName}</span>
@@ -1851,8 +1874,16 @@ const App: React.FC = () => {
 
             {/* RIGHT SIDEBAR / CHAT UI */}
             {/* The ChatInterface component will be refactored to take full height of its container next */}
-            <div className={`absolute right-4 top-24 bottom-4 w-[360px] max-w-[90vw] z-20 transition-transform duration-500 ease-in-out pointer-events-none ${chatOpen ? 'translate-x-0' : 'translate-x-[120%]'}`}>
-                <div className="w-full h-full pointer-events-auto flex flex-col">
+            {/* RIGHT SIDEBAR / CHAT UI */}
+            {/* The ChatInterface component will be refactored to take full height of its container next */}
+            <div className={`absolute lg:right-4 max-lg:inset-0 lg:top-24 lg:bottom-4 lg:w-[360px] max-lg:w-full z-[100] transition-all duration-500 ease-in-out pointer-events-none ${
+                // Mobile visibility
+                (mobileView === 'chat') ? 'translate-x-0 opacity-100' : 'max-lg:translate-x-full max-lg:opacity-0'
+            } ${
+                // Desktop visibility
+                chatOpen ? 'lg:translate-x-0' : 'lg:translate-x-[120%]'
+            }`}>
+                <div className={`w-full h-full pointer-events-auto flex flex-col ${mobileView === 'chat' ? 'bg-white' : ''}`}>
                     <ChatInterface
                         messages={conversationMessages}
                         onSendMessage={handleUserMessage}
@@ -1865,16 +1896,41 @@ const App: React.FC = () => {
                 </div>
             </div>
 
-            {/* Floating Chat Toggle Button (when left sidebar is closed) */}
+            {/* Floating Chat Toggle Button (Desktop only) */}
             {!chatOpen && (
                 <button
                     onClick={() => setChatOpen(true)}
-                    className="absolute right-4 bottom-4 z-20 bg-indigo-600 text-white p-4 rounded-full shadow-2xl hover:bg-indigo-700 hover:scale-110 transition-all border border-indigo-400 flex items-center justify-center group"
+                    className="absolute right-4 bottom-4 z-20 bg-indigo-600 text-white p-4 rounded-full shadow-2xl hover:bg-indigo-700 hover:scale-110 transition-all border border-indigo-400 hidden lg:flex items-center justify-center group"
                 >
                     <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" /></svg>
                     <span className="absolute right-14 opacity-0 group-hover:opacity-100 bg-black/80 text-white text-[10px] font-bold px-2 py-1 rounded whitespace-nowrap transition-opacity">Open AI Chat</span>
                 </button>
             )}
+
+            {/* MOBILE BOTTOM NAVIGATION */}
+            <div className="lg:hidden fixed bottom-0 left-0 right-0 z-[200] bg-white/90 backdrop-blur-xl border-t border-slate-200 p-2 pb-6 flex items-center justify-around shadow-[0_-10px_30px_rgba(0,0,0,0.1)]">
+                <button
+                    onClick={() => setMobileView('map')}
+                    className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-all ${mobileView === 'map' ? 'text-indigo-600 bg-indigo-50 scale-105' : 'text-slate-400'}`}
+                >
+                    <span className="text-xl">🗺️</span>
+                    <span className="text-[9px] font-black uppercase tracking-widest">Map</span>
+                </button>
+                <button
+                    onClick={() => { setMobileView('analytics'); setSheetState('half'); }}
+                    className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-all ${mobileView === 'analytics' ? 'text-indigo-600 bg-indigo-50 scale-105' : 'text-slate-400'}`}
+                >
+                    <span className="text-xl">📊</span>
+                    <span className="text-[9px] font-black uppercase tracking-widest">Intelligence</span>
+                </button>
+                <button
+                    onClick={() => setMobileView('chat')}
+                    className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-all ${mobileView === 'chat' ? 'text-indigo-600 bg-indigo-50 scale-105' : 'text-slate-400'}`}
+                >
+                    <span className="text-xl">💬</span>
+                    <span className="text-[9px] font-black uppercase tracking-widest">AI Chat</span>
+                </button>
+            </div>
         </div>
     );
 };
