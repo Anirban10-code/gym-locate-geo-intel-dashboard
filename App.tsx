@@ -168,17 +168,18 @@ const MapRevalidator = () => {
     return null;
 };
 
-// Component to control map zoom and center
-const MapZoomController = ({ center, zoom }: { center: [number, number] | null, zoom: number }) => {
+// Component to control map zoom and center.
+// navigateKey: increment to force a re-pan even when center/zoom are unchanged.
+const MapZoomController = ({ center, zoom, navigateKey }: { center: [number, number] | null, zoom: number, navigateKey: number }) => {
     const map = useMap();
     useEffect(() => {
-        if (center) {
-            map.setView(center, zoom, { animate: true, duration: 0.8 });
-        } else {
-            // Reset to Bangalore center if no selection
-            map.setView([BANGALORE_CENTER.lat, BANGALORE_CENTER.lng], zoom, { animate: true, duration: 0.5 });
-        }
-    }, [center, zoom, map]);
+        const target = center ?? [BANGALORE_CENTER.lat, BANGALORE_CENTER.lng] as [number, number];
+        // Stop any in-progress pan/zoom animation first, then flyTo.
+        // map.setView() with animate:true can silently fail when a prior animation is
+        // still active (e.g. after a cluster click). flyTo() + stop() is always reliable.
+        map.stop();
+        map.flyTo(target, zoom, { duration: 0.6, easeLinearity: 0.5 });
+    }, [center, navigateKey, zoom, map]);
     return null;
 };
 
@@ -308,6 +309,8 @@ const App: React.FC = () => {
     const [selectedWard, setSelectedWard] = useState<string | null>(null);
     const [mapZoom, setMapZoom] = useState<number>(11); // Start zoomed out
     const [searchQuery, setSearchQuery] = useState<string>(''); // Place search query
+    // Used to force MapZoomController to re-pan even if center/zoom didn't change
+    const [mapNavigateKey, setMapNavigateKey] = useState<number>(0);
 
     // NEW: Dynamic ward clusters loaded from CSV
     const [wardClusters, setWardClusters] = useState<any[]>([]);
@@ -322,8 +325,8 @@ const App: React.FC = () => {
     }>>({});
 
     // NEW: Search query results
-    const [searchResults, setSearchResults] = useState<any[]>([]);
     const [queryDescription, setQueryDescription] = useState<string>('');
+    const [searchResults, setSearchResults] = useState<any[]>([]);
 
     // CHAT: Conversation state
     const [chatOpen, setChatOpen] = useState(false);
@@ -468,6 +471,7 @@ const App: React.FC = () => {
         setSelectedCluster(clusterId);
         setSelectedWard(null);
         setMapZoom(15); // Zoom in for analysis
+        setMapNavigateKey(k => k + 1);
     }, []);
 
     const handleWardClick = useCallback((lat: number, lng: number, wardName: string) => {
@@ -475,24 +479,25 @@ const App: React.FC = () => {
         setSelectedWard(wardName);
         setSelectedCluster(null);
         setMapZoom(14); // Zoom in for analysis
+        setMapNavigateKey(k => k + 1);
     }, []);
 
     // NEW: Intelligent query search (supports natural language + domain detection)
     const handlePlaceSearch = useCallback(async (query: string) => {
         if (!query) {
-            setSearchResults([]);
             setQueryDescription('');
+            setSearchResults([]);
             return;
         }
+
+        // Clear old search results at the start of a new search
+        setSearchResults([]);
 
         // Detect if the user input is a freeform question (natural language QA)
         const isQuestion = /\?|^what\b|^where\b|^how\b|^is\b|^are\b|^who\b|^when\b|^which\b|^tell\b|^show\b/i.test(query.trim());
 
         if (isQuestion) {
-            console.log("🗣️ Conversational query detected, routing to chat:", query);
-            setChatOpen(true);
-            setSearchQuery('');
-            handleUserMessage(query);
+            // Skip - questions handled at input level (clear results before returning)
             return;
         }
 
@@ -519,8 +524,9 @@ const App: React.FC = () => {
                 console.log(`🔍 Query: "${query}"`);
                 console.log(`📊 Found ${results.length} results`);
 
-                setSearchResults(results);
+                setChatOpen(false);  // Close chat when showing search results
                 setQueryDescription(description + domainNote);
+                setSearchResults(results);  // Display results
 
                 // If single result, zoom to it automatically
                 if (results.length === 1) {
@@ -529,6 +535,7 @@ const App: React.FC = () => {
                     setSelectedCluster(ward.id);
                     setSelectedWard(null);
                     setMapZoom(14);
+                    setMapNavigateKey(k => k + 1);
                 }
                 return;
             }
@@ -558,11 +565,12 @@ const App: React.FC = () => {
 
                 console.log(`📍 Found external place: ${place.display_name}`);
 
-                setSearchResults([]);
+                setChatOpen(false);  // Close chat when showing search results
                 setSelectedPos([lat, lng]);
                 setSelectedCluster(null);
                 setSelectedWard(null);
                 setMapZoom(14);
+                setMapNavigateKey(k => k + 1);
 
                 const placeName = place.display_name.split(',')[0];
                 setQueryDescription(
@@ -576,11 +584,12 @@ const App: React.FC = () => {
                 const places = await textSearch(geoQuery);
 
                 if (places && places.length > 0) {
-                    setSearchResults(places);
+                    setChatOpen(false);  // Close chat when showing search results
                     setQueryDescription(
                         `Found ${places.length} place(s) from Google Places for "${geoQuery}"` +
                         (intent.hasDomain ? ` · ${intent.domain} mode active` : '')
                     );
+                    setSearchResults(places);  // Display results
                     const first = places[0];
                     if (first.location && first.location.lat && first.location.lng) {
                         setSelectedPos([first.location.lat, first.location.lng]);
@@ -588,6 +597,7 @@ const App: React.FC = () => {
                     }
                 } else {
                     setQueryDescription(`No results found for "${geoQuery}"`);
+                    setSearchResults([]);
                     alert(`Location "${geoQuery}" not found.`);
                 }
             }
@@ -696,13 +706,22 @@ const App: React.FC = () => {
         }
     }, [selectedPos, searchRadius]);
 
-    const performAnalysis = useCallback(async (overrideDomain?: string) => {
-        if (!selectedPos) return;
+    const performAnalysis = useCallback(async (
+        overrideDomain?: string,
+        overrideCluster?: string | null,
+        overrideLocation?: [number, number]
+    ) => {
+        // Use overrideLocation when provided (chat navigation) to avoid stale selectedPos closure.
+        const analysisPos = overrideLocation || selectedPos;
+        if (!analysisPos) return;
         setIsAnalyzing(true);
         setAiInsight('Fetching real POI data from Google Places...');
 
         // Use overrideDomain if supplied (e.g. from chat), otherwise use active UI domain
         const domainToUse = (overrideDomain || activeDomain) as keyof typeof DOMAIN_CONFIG;
+        // overrideCluster lets callers pass null explicitly to avoid the stale state closure
+        // that occurs when setSelectedCluster(null) hasn't propagated before performAnalysis runs.
+        const effectiveCluster = overrideCluster !== undefined ? overrideCluster : selectedCluster;
 
         try {
             const domain = DOMAIN_CONFIG[domainToUse];
@@ -712,8 +731,8 @@ const App: React.FC = () => {
             if (domainToUse === 'gym') {
                 // ── GYM DOMAIN: Our advanced V2 scoring ─────────────────────
                 const intel = await getLocationIntelligence(
-                    selectedPos[0],
-                    selectedPos[1],
+                    analysisPos[0],
+                    analysisPos[1],
                     searchRadius
                 );
 
@@ -732,7 +751,7 @@ const App: React.FC = () => {
                 console.log('📊 SCORING V2 (GYM):', realScores);
                 setScores(realScores);
 
-                if (selectedCluster) {
+                if (effectiveCluster) {
                     const opportunityScore = realScores.total / 100;
                     const finalScore = opportunityScore;
                     const demographicLoad = realScores.demographicLoad;
@@ -744,7 +763,7 @@ const App: React.FC = () => {
                     else growthRate = 0.02;
                     if (demographicLoad > 70) growthRate += 0.03;
                     if (intel.corporateOffices.total > 10) growthRate += 0.02;
-                    setWardScores(prev => ({ ...prev, [selectedCluster]: { opportunityScore, finalScore, growthRate, demographicLoad, competitorDensity } }));
+                    setWardScores(prev => ({ ...prev, [effectiveCluster]: { opportunityScore, finalScore, growthRate, demographicLoad, competitorDensity } }));
                 }
 
                 const recommendation = generateDataDrivenRecommendation(intel, realScores);
@@ -753,8 +772,8 @@ const App: React.FC = () => {
             } else {
                 // ── RESTAURANT / BANK DOMAIN: Generic domain intelligence ────
                 const intel = await getDomainIntelligence(
-                    selectedPos[0],
-                    selectedPos[1],
+                    analysisPos[0],
+                    analysisPos[1],
                     searchRadius,
                     domain.competitorTypes,
                     domain.infraTypes
@@ -774,14 +793,14 @@ const App: React.FC = () => {
                 realScores = calculateDomainScores(intel, domainToUse, searchRadius);
                 currentTotalScore = realScores.total;
 
-                if (selectedCluster) {
+                if (effectiveCluster) {
                     const opportunityScore = realScores.total / 100;
                     const finalScore = opportunityScore;
                     let growthRate = intel.marketGap === 'UNTAPPED' ? 0.15 :
                         intel.marketGap === 'OPPORTUNITY' ? 0.10 :
                             intel.marketGap === 'COMPETITIVE' ? 0.05 : 0.02;
                     if (realScores.demographicLoad > 70) growthRate += 0.03;
-                    setWardScores(prev => ({ ...prev, [selectedCluster]: { opportunityScore, finalScore, growthRate, demographicLoad: realScores.demographicLoad, competitorDensity: intel.competitors.total } }));
+                    setWardScores(prev => ({ ...prev, [effectiveCluster]: { opportunityScore, finalScore, growthRate, demographicLoad: realScores.demographicLoad, competitorDensity: intel.competitors.total } }));
                 }
 
                 const recommendation = generateDomainRecommendation(intel, domainToUse);
@@ -842,7 +861,7 @@ const App: React.FC = () => {
         } catch (error) {
             console.error('Places API analysis failed:', error);
             setAiInsight('⚠️ Places API unavailable. Add GOOGLE_MAPS_API_KEY to .env.local for real POI data. Using fallback mock data...');
-            const fallbackScores = calculateSuitability(selectedPos[0], selectedPos[1], searchRadius / 1000);
+            const fallbackScores = calculateSuitability(analysisPos[0], analysisPos[1], searchRadius / 1000);
             setScores(fallbackScores);
             setIsAnalyzing(false);
         }
@@ -989,11 +1008,13 @@ const App: React.FC = () => {
                     case 'navigate':
                         if (action.payload.location) {
                             setSelectedPos(action.payload.location);
+                            setSelectedCluster(null); // Unlock UI from any previously clicked map cluster
                             setMapZoom(action.payload.zoom || 14);
+                            setMapNavigateKey(k => k + 1); // Force map to pan even if coords are same as cluster
 
-                            if (action.payload.wardName) {
-                                setSelectedWard(action.payload.wardName);
-                            }
+                            // Always clear selectedWard so old ward label doesn't persist when
+                            // the chatbot navigates to a place that has no wardName.
+                            setSelectedWard(action.payload.wardName || null);
 
                             if (action.payload.triggerAnalysis) {
                                 if (response.prefetchedIntel) {
@@ -1017,16 +1038,19 @@ const App: React.FC = () => {
                                     const cachedScores = calculateDomainScores(intel, detectedDomain as DomainId, searchRadius);
                                     setScores(cachedScores);
 
-                                    // Call the correct recommendation function based on data shape
-                                    if (isGymShape) {
-                                        setAiInsight(generateDataDrivenRecommendation(intel, cachedScores));
-                                    } else {
-                                        setAiInsight(generateDomainRecommendation(intel, detectedDomain));
+                                    // For non-gym domains, fire performAnalysis in background to get
+                                    // the proper domain-specific scoring (no UI blocking, free re-use of cache)
+                                    if (detectedDomain !== 'gym') {
+                                        const chatLocation = action.payload.location;
+                                        // Pass null cluster and the explicit chat location to avoid stale closures.
+                                        setTimeout(() => { performAnalysis(detectedDomain, null, chatLocation); }, 400);
                                     }
                                 } else {
-                                    // Fallback: trigger fresh analysis with the detected domain
+                                    // Fallback: trigger fresh analysis with the detected domain.
+                                    // Pass null cluster + explicit location to avoid stale closures.
+                                    const chatLocation = action.payload.location;
                                     console.log('🔍 Triggering performAnalysis() — no prefetchedIntel, domain:', detectedDomain);
-                                    setTimeout(() => { performAnalysis(detectedDomain); }, 300);
+                                    setTimeout(() => { performAnalysis(detectedDomain, null, chatLocation); }, 300);
                                 }
                             }
                         }
@@ -1057,7 +1081,8 @@ const App: React.FC = () => {
         } finally {
             setIsAITyping(false);
         }
-    }, [conversationMessages, selectedPos, selectedWard, scores, realPOIs, wardClusters, performAnalysis]);
+    }, [conversationMessages, selectedPos, selectedWard, selectedCluster, scores, realPOIs,
+        wardClusters, searchRadius, activeDomain, performAnalysis]);
 
     // Clear chat history
     const handleClearChat = useCallback(() => {
@@ -1085,7 +1110,7 @@ const App: React.FC = () => {
                     {/* {showHeatmap && <HeatmapLayer locations={MOCK_LOCATIONS} />} */}
                     <MapEvents onMapClick={handleMapClick} />
                     <MapRevalidator />
-                    <MapZoomController center={selectedPos} zoom={mapZoom} />
+                    <MapZoomController center={selectedPos} zoom={mapZoom} navigateKey={mapNavigateKey} />
 
                     {selectedPos && (
                         <Circle
@@ -1491,7 +1516,20 @@ const App: React.FC = () => {
                                             setSearchQuery(chosen);
                                             setSearchSuggestions([]);
                                             setSuggestionIndex(-1);
-                                            handlePlaceSearch(chosen);
+                                            
+                                            // Check if it's a question or normal search
+                                            const isQuestion = /\?|^what\b|^where\b|^how\b|^is\b|^are\b|^who\b|^when\b|^which\b|^tell\b|^show\b/i.test(chosen.trim());
+                                            
+                                            if (isQuestion) {
+                                                // Route to chat
+                                                setChatOpen(true);
+                                                setTimeout(() => {
+                                                    handleUserMessage(chosen);
+                                                }, 100);
+                                            } else {
+                                                // Normal location search
+                                                handlePlaceSearch(chosen);
+                                            }
                                         }
                                     } else if (e.key === 'Escape') {
                                         setSearchSuggestions([]);
@@ -1523,7 +1561,26 @@ const App: React.FC = () => {
                                     </button>
                                 )}
                                 <button
-                                    onClick={() => { setSearchSuggestions([]); handlePlaceSearch(searchQuery.trim()); }}
+                                    onClick={() => { 
+                                        const query = searchQuery.trim();
+                                        if (query) {
+                                            setSearchSuggestions([]);
+                                            
+                                            // Check if it's a question or normal search
+                                            const isQuestion = /\?|^what\b|^where\b|^how\b|^is\b|^are\b|^who\b|^when\b|^which\b|^tell\b|^show\b/i.test(query);
+                                            
+                                            if (isQuestion) {
+                                                // Route to chat
+                                                setChatOpen(true);
+                                                setTimeout(() => {
+                                                    handleUserMessage(query);
+                                                }, 100);
+                                            } else {
+                                                // Normal location search
+                                                handlePlaceSearch(query);
+                                            }
+                                        }
+                                    }}
                                     className="px-3 bg-indigo-600 text-white text-xs font-black rounded-lg hover:shadow-lg transition-all"
                                 >
                                     🔍
@@ -1563,7 +1620,6 @@ const App: React.FC = () => {
                     <div className="backdrop-blur-xl bg-white/95 shadow-2xl border border-white/50 rounded-2xl p-3 pointer-events-auto animate-in slide-in-from-top-2 duration-300">
                         <div className="flex justify-between items-center mb-2 px-1 border-b border-slate-100 pb-2">
                             <span className="text-[10px] font-black text-slate-700 uppercase tracking-widest">{queryDescription}</span>
-                            <button onClick={() => { setSearchResults([]); setSearchQuery(''); }} className="text-[9px] text-slate-400 hover:text-red-500 font-bold transition-colors">CLEAR</button>
                         </div>
                         <div className="space-y-2 max-h-[40vh] overflow-y-auto custom-scrollbar pr-1">
                             {/* Re-using exact same search result mapping logic */}
@@ -1872,38 +1928,30 @@ const App: React.FC = () => {
                 </div>
             </div>
 
-            {/* RIGHT SIDEBAR / CHAT UI */}
-            {/* The ChatInterface component will be refactored to take full height of its container next */}
-            {/* RIGHT SIDEBAR / CHAT UI */}
-            {/* The ChatInterface component will be refactored to take full height of its container next */}
-            <div className={`absolute lg:right-4 max-lg:inset-0 lg:top-24 lg:bottom-4 lg:w-[360px] max-lg:w-full z-[100] transition-all duration-500 ease-in-out pointer-events-none ${
-                // Mobile visibility
-                (mobileView === 'chat') ? 'translate-x-0 opacity-100' : 'max-lg:translate-x-full max-lg:opacity-0'
-            } ${
-                // Desktop visibility
-                chatOpen ? 'lg:translate-x-0' : 'lg:translate-x-[120%]'
-            }`}>
-                <div className={`w-full h-full pointer-events-auto flex flex-col ${mobileView === 'chat' ? 'bg-white' : ''}`}>
+            {/* RIGHT SIDEBAR / CHAT UI - Truly floating, doesn't affect layout */}
+            <div className={`fixed right-4 top-24 bottom-4 w-[360px] max-w-[90vw] z-50 transition-transform duration-300 ease-out pointer-events-none ${chatOpen ? 'translate-x-0' : 'translate-x-[calc(100%+32px)]'}`}>
+                <div className="w-full h-full pointer-events-auto flex flex-col">
                     <ChatInterface
                         messages={conversationMessages}
                         onSendMessage={handleUserMessage}
                         onClearChat={handleClearChat}
                         isAITyping={isAITyping}
-                        isOpen={true} // Force true inside its own container, toggle via the container itself
+                        isOpen={chatOpen}
                         onToggle={() => setChatOpen(!chatOpen)}
                         selectedWard={selectedWard || undefined}
                     />
                 </div>
             </div>
 
-            {/* Floating Chat Toggle Button (Desktop only) */}
+            {/* Floating Chat Toggle Button (always visible when chat is closed) */}
             {!chatOpen && (
                 <button
                     onClick={() => setChatOpen(true)}
-                    className="absolute right-4 bottom-4 z-20 bg-indigo-600 text-white p-4 rounded-full shadow-2xl hover:bg-indigo-700 hover:scale-110 transition-all border border-indigo-400 hidden lg:flex items-center justify-center group"
+                    className="fixed right-4 bottom-4 z-40 bg-indigo-600 text-white p-4 rounded-full shadow-2xl hover:bg-indigo-700 hover:scale-110 transition-all border border-indigo-400 flex items-center justify-center group"
+                    title="Open AI Chat"
                 >
                     <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" /></svg>
-                    <span className="absolute right-14 opacity-0 group-hover:opacity-100 bg-black/80 text-white text-[10px] font-bold px-2 py-1 rounded whitespace-nowrap transition-opacity">Open AI Chat</span>
+                    <span className="absolute right-14 opacity-0 group-hover:opacity-100 bg-black/80 text-white text-[10px] font-bold px-2 py-1 rounded whitespace-nowrap transition-opacity pointer-events-none">Open AI Chat</span>
                 </button>
             )}
 
@@ -1936,3 +1984,4 @@ const App: React.FC = () => {
 };
 
 export default App;
+
