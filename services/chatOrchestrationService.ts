@@ -15,10 +15,14 @@
 import { GoogleGenAI } from "@google/genai";
 import {
     getLocationIntelligence,
+    getDomainIntelligence,
     generateDataDrivenRecommendation,
+    generateDomainRecommendation,
     textSearch,
     PlaceResult
 } from './placesAPIService';
+import { DOMAIN_CONFIG, DomainId } from '../domains';
+import { calculateDomainScores } from './scoringEngine';
 import { ScoringMatrix } from '../types';
 import { GEMINI_PROXY_URL, USE_DIRECT_API } from './apiConfig';
 
@@ -177,7 +181,22 @@ export async function processUserQuery(
             }
 
             // ============================================
-            // Step 4: Fetch Places API data
+            // Step 4: Bounding box guard — reject out-of-Bangalore coords
+            // ============================================
+
+            const resolvedLat = toolRequest.params.lat;
+            const resolvedLng = toolRequest.params.lng;
+            if (resolvedLat && resolvedLng && !isInsideBangalore(resolvedLat, resolvedLng)) {
+                console.warn(`⛔ Out-of-Bangalore coordinates blocked: [${resolvedLat}, ${resolvedLng}]`);
+                return {
+                    text: "I only cover **Bangalore**. Please ask about a neighbourhood, ward, or area within Bangalore (e.g. HSR Layout, Koramangala, Indiranagar, Whitefield, JP Nagar).",
+                    usedPlacesAPI: false,
+                    usedGemini: true
+                };
+            }
+
+            // ============================================
+            // Step 5: Fetch Places API data
             // ============================================
 
             const placesData = await fetchPlacesData(toolRequest, context);
@@ -186,7 +205,7 @@ export async function processUserQuery(
             // Step 5: Format results and create map action
             // ============================================
 
-            const formattedResults = formatPlacesResults(placesData, toolRequest.action);
+            const formattedResults = formatPlacesResults(placesData, toolRequest.action, context.domain, context.radius);
             const mapAction = createMapAction(toolRequest, placesData, context);
 
             // ============================================
@@ -284,9 +303,24 @@ Simply summarize this existing strategic analysis naturally for the user. Be con
 // Helper Functions
 // ============================================
 
+// Bangalore geographic bounding box — any geocoded result outside this is rejected.
+const BANGALORE_BOUNDS = {
+    latMin: 12.77,
+    latMax: 13.18,
+    lngMin: 77.38,
+    lngMax: 77.82,
+};
+
+function isInsideBangalore(lat: number, lng: number): boolean {
+    return (
+        lat >= BANGALORE_BOUNDS.latMin && lat <= BANGALORE_BOUNDS.latMax &&
+        lng >= BANGALORE_BOUNDS.lngMin && lng <= BANGALORE_BOUNDS.lngMax
+    );
+}
+
 /**
  * Geocode a place name to coordinates using Nominatim.
- * Returns [lat, lng] or null if not found.
+ * Returns [lat, lng] or null if not found OR if outside Bangalore.
  */
 async function geocodeQuery(query: string): Promise<[number, number] | null> {
     try {
@@ -294,15 +328,19 @@ async function geocodeQuery(query: string): Promise<[number, number] | null> {
         const resp = await fetch(url);
         const data = await resp.json();
         if (data && data.length > 0) {
-            return [parseFloat(data[0].lat), parseFloat(data[0].lon)];
+            const lat = parseFloat(data[0].lat);
+            const lng = parseFloat(data[0].lon);
+            if (isInsideBangalore(lat, lng)) return [lat, lng];
         }
-        // Try without "Bangalore" suffix as fallback
+        // Try without "Bangalore" suffix as fallback — but ONLY accept if inside bounding box
         const resp2 = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(query)}`);
         const data2 = await resp2.json();
         if (data2 && data2.length > 0) {
-            return [parseFloat(data2[0].lat), parseFloat(data2[0].lon)];
+            const lat = parseFloat(data2[0].lat);
+            const lng = parseFloat(data2[0].lon);
+            if (isInsideBangalore(lat, lng)) return [lat, lng];
         }
-        return null;
+        return null; // Not found or outside Bangalore
     } catch {
         return null;
     }
@@ -322,9 +360,15 @@ function buildAgenticSystemPrompt(context: ChatContext): string {
     const activeDomain = context.domain || 'gym';
     const domainLabel = domainLabels[activeDomain] || activeDomain;
 
-    let prompt = `You are a geo-intelligence assistant helping users find optimal **${domainLabel}** locations in Bangalore.
+    let prompt = `You are a geo-intelligence assistant helping users find optimal **${domainLabel}** locations in **Bangalore, India**.
 
-You have access to a **Places API Tool** that can fetch real-time location data. When users ask about locations, businesses, or area analysis, respond with ONLY a valid JSON block like this (choose one action):
+🚫 **STRICT SCOPE — BANGALORE ONLY:**
+You ONLY assist with queries about locations, areas, and businesses **within Bangalore city limits**.
+If the user asks about any city, area, or location OUTSIDE Bangalore (e.g. Mumbai, Delhi, Chennai, Hyderabad, Mysore, Pune, or any international city), you MUST politely decline and redirect them like this:
+> "I only cover Bangalore. Please ask about a neighbourhood, ward, or area within Bangalore (e.g. HSR Layout, Koramangala, Indiranagar, Whitefield, JP Nagar)."
+Do NOT call the Places API for out-of-Bangalore queries. Do NOT guess or hallucinate data for other cities.
+
+You have access to a **Places API Tool** that can fetch real-time location data. When users ask about locations, businesses, or area analysis **within Bangalore**, respond with ONLY a valid JSON block like this (choose one action):
 
 \`\`\`json
 {
@@ -346,19 +390,20 @@ You have access to a **Places API Tool** that can fetch real-time location data.
 - \`get_intelligence\`: Comprehensive location intelligence report
 
 **When to use Places API:**
-- User asks about specific locations ("Find ${domainLabel}s in HSR Layout")
+- User asks about specific Bangalore locations ("Find ${domainLabel}s in HSR Layout")
 - User wants competition analysis ("How many ${domainLabel}s are nearby?")
-- User asks for recommendations ("Best area for a ${domainLabel}?")
-- User wants to compare areas
+- User asks for recommendations ("Best area in Bangalore for a ${domainLabel}?")
+- User wants to compare Bangalore areas
 
 **When NOT to use Places API:**
 - General questions (greetings, clarifications)
 - Questions about current visible data
 - Simple conversations
+- Queries about places OUTSIDE Bangalore ← refuse these with the message above
 
 **CRITICAL:** If you decide to call the Places API, respond with ONLY the JSON block above. Do not add any extra text before or after the JSON — this will cause a parsing error.
 
-**IMPORTANT - Coordinates:** Always provide accurate lat/lng for named locations (e.g. HSR Layout = 12.9116, 77.6389; Koramangala = 12.9352, 77.6245; Whitefield = 12.9698, 77.7500; Hebbal = 13.0352, 77.5970; Indiranagar = 12.9784, 77.6408; Jayanagar = 12.9308, 77.5838; Marathahalli = 12.9591, 77.6972). If unsure of exact coords, include the area name in the "query" field and omit lat/lng.
+**IMPORTANT - Coordinates (Bangalore only):** Always provide accurate lat/lng for named Bangalore locations (e.g. HSR Layout = 12.9116, 77.6389; Koramangala = 12.9352, 77.6245; Whitefield = 12.9698, 77.7500; Hebbal = 13.0352, 77.5970; Indiranagar = 12.9784, 77.6408; Jayanagar = 12.9308, 77.5838; Marathahalli = 12.9591, 77.6972). All coordinates MUST be within Bangalore bounds (lat 12.77–13.18, lng 77.38–77.82). If unsure of exact coords, include the area name in the "query" field and omit lat/lng.
 
 `;
 
@@ -372,9 +417,13 @@ You have access to a **Places API Tool** that can fetch real-time location data.
             prompt += `- Location: [${context.currentLocation[0].toFixed(4)}, ${context.currentLocation[1].toFixed(4)}]\n`;
         }
         if (context.scores) {
-            prompt += `- Site Score: ${context.scores.total}/100\n`;
-            prompt += `- Gyms Nearby: ${context.realPOIs?.gyms?.length || 0}\n`;
-            prompt += `- Corporate Offices: ${context.realPOIs?.corporates?.length || 0}\n`;
+            const domainCfg = DOMAIN_CONFIG[(activeDomain as DomainId)] || DOMAIN_CONFIG.gym;
+            const competitorLabel = domainCfg.competitorLabel;
+            prompt += `- Current Site Score: ${context.scores.total}/100 (may be stale if navigating to a new area)\n`;
+            prompt += `- Domain: ${domainCfg.label}\n`;
+            // Note: competitor counts are intentionally omitted here to avoid Gemini
+            // hallucinating stale counts from the previously-analyzed location.
+            // Real-time counts will be in the Places API results below.
         }
     }
 
@@ -449,16 +498,42 @@ async function fetchPlacesData(
 
     switch (action) {
         case 'analyze_location':
-        case 'get_intelligence':
+        case 'get_intelligence': {
+            // Use domain-aware intelligence so competitor counts match the active domain
+            const domain = context.domain as DomainId | undefined;
+            if (domain && domain !== 'gym') {
+                const domainCfg = DOMAIN_CONFIG[domain];
+                return await getDomainIntelligence(
+                    lat, lng, radius,
+                    domainCfg.competitorTypes,
+                    domainCfg.infraTypes
+                );
+            }
             return await getLocationIntelligence(lat, lng, radius);
+        }
 
         case 'search_places':
+            // For non-gym domain contexts with location data, redirect to domain intelligence
+            // instead of returning a raw place list. This handles cases where Gemini picks
+            // search_places for strategic queries like "retail shops near Yelachenahalli".
+            if (lat && lng) {
+                const domainForSearch = context.domain as DomainId | undefined;
+                if (domainForSearch && domainForSearch !== 'gym') {
+                    const domainCfg = DOMAIN_CONFIG[domainForSearch];
+                    console.log(`🔀 Redirecting search_places → getDomainIntelligence for domain: ${domainForSearch}`);
+                    return await getDomainIntelligence(
+                        lat, lng, radius,
+                        domainCfg.competitorTypes,
+                        domainCfg.infraTypes
+                    );
+                }
+            }
+            // Fallback: raw text search (for gym domain or when no location)
             if (params.query) {
-                return await textSearch(params.query, lat, lng);
+                return await textSearch(params.query, lat || 0, lng || 0);
             } else if (params.types && params.types.length > 0) {
-                // Use nearbySearch from placesAPIService
                 const { nearbySearch } = await import('./placesAPIService');
-                return await nearbySearch(lat, lng, radius, params.types);
+                return await nearbySearch(lat || 0, lng || 0, radius, params.types);
             }
             throw new Error('Search requires either query or types');
 
@@ -470,24 +545,61 @@ async function fetchPlacesData(
 /**
  * Format Places API results for Gemini
  */
-function formatPlacesResults(data: any, action: string): string {
+function formatPlacesResults(data: any, action: string, domain?: string, radius: number = 1000): string {
     let formatted = `=== Places API Results ===\n\n`;
 
     if (action === 'analyze_location' || action === 'get_intelligence') {
-        // Location intelligence format
         const intel = data;
-        formatted += `**Area Analysis:**\n`;
-        formatted += `- Gyms: ${intel.gyms.total} (${intel.gyms.highRated} rated 4+★, avg ${intel.gyms.averageRating}★)\n`;
-        formatted += `- Corporate Offices: ${intel.corporateOffices.total}\n`;
-        formatted += `- Residential Complexes: ${intel.apartments.total}\n`;
-        formatted += `- Cafes/Restaurants: ${intel.cafesRestaurants.total} (${intel.cafesRestaurants.healthFocused} health-focused)\n`;
-        formatted += `- Transit Stations: ${intel.transitStations.total}\n`;
-        formatted += `- Competition Level: ${intel.competitionLevel}\n`;
-        formatted += `- Market Opportunity: ${intel.marketGap}\n\n`;
+        // Detect whether this is a DomainLocationIntelligence (non-gym) or LocationIntelligence (gym)
+        const isDomainIntel = 'competitors' in intel;
+        const domainId = (domain as DomainId | undefined);
+        const domainCfg = domainId ? (DOMAIN_CONFIG[domainId] || DOMAIN_CONFIG.gym) : DOMAIN_CONFIG.gym;
+        const competitorLabel = domainCfg.competitorLabel;
 
-        // Add data-driven recommendation
-        const recommendation = generateDataDrivenRecommendation(intel);
-        formatted += `**Strategic Recommendation:**\n${recommendation}\n`;
+        // Compute scores so recommendation functions have real gap/demand/vibe values.
+        // Without this, generateDataDrivenRecommendation defaults gap/demand/vibe/conn to 0,
+        // causing it to always show "SATURATED — Gap Index 0/100" regardless of actual data.
+        const computedScores = (() => {
+            try {
+                return calculateDomainScores(intel, domainId || 'gym', radius);
+            } catch {
+                return undefined;
+            }
+        })();
+
+        formatted += `**Area Analysis (${domainCfg.label}):**\n`;
+        if (isDomainIntel) {
+            // DomainLocationIntelligence — retail / restaurant / bank
+            formatted += `- ${competitorLabel}: ${intel.competitors.total} (${intel.competitors.highRated} rated 4+★, avg ${intel.competitors.averageRating}★)\n`;
+            formatted += `- Corporate Offices: ${intel.corporateOffices.total}\n`;
+            formatted += `- Residential Complexes: ${intel.apartments.total}\n`;
+            formatted += `- Infra/Synergy (${domainCfg.infraTypes.join(', ')}): ${intel.infraSynergy.total}\n`;
+            formatted += `- Transit Stations: ${intel.transitStations.total}\n`;
+            formatted += `- Competition Level: ${intel.competitionLevel}\n`;
+            formatted += `- Market Opportunity: ${intel.marketGap}\n`;
+            if (computedScores) {
+                formatted += `- Gap Index: ${computedScores.competitorRatio}/100 | Demand: ${computedScores.demographicLoad}/100\n`;
+            }
+            formatted += `\n`;
+            const recommendation = generateDomainRecommendation(intel, domainId || 'gym');
+            formatted += `**Strategic Recommendation:**\n${recommendation}\n`;
+        } else {
+            // LocationIntelligence — gym domain
+            formatted += `- Gyms: ${intel.gyms.total} (${intel.gyms.highRated} rated 4+★, avg ${intel.gyms.averageRating}★)\n`;
+            formatted += `- Corporate Offices: ${intel.corporateOffices.total}\n`;
+            formatted += `- Residential Complexes: ${intel.apartments.total}\n`;
+            formatted += `- Cafes/Restaurants: ${intel.cafesRestaurants.total} (${intel.cafesRestaurants.healthFocused} health-focused)\n`;
+            formatted += `- Transit Stations: ${intel.transitStations.total}\n`;
+            formatted += `- Competition Level: ${intel.competitionLevel}\n`;
+            formatted += `- Market Opportunity: ${intel.marketGap}\n`;
+            if (computedScores) {
+                formatted += `- Gap Index: ${computedScores.competitorRatio}/100 | Demand: ${computedScores.demographicLoad}/100 | Total Score: ${computedScores.total}/100\n`;
+            }
+            formatted += `\n`;
+            // Pass computed scores so gap/demand/vibe/connectivity values are real
+            const recommendation = generateDataDrivenRecommendation(intel, computedScores);
+            formatted += `**Strategic Recommendation:**\n${recommendation}\n`;
+        }
 
     } else if (action === 'search_places') {
         // Search results format

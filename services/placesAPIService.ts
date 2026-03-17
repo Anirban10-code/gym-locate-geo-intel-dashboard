@@ -186,7 +186,10 @@ async function fetchSingleZone(
         }
 
         const data = await response.json();
-        return (data.places || []).map(mapPlace);
+        const rawPlaces = (data.places || []).map(mapPlace);
+        // GLOBAL FILTER: Only include OPERATIONAL businesses in all calculations
+        // (Places without a status — parks, transit — are kept via the !p.businessStatus guard)
+        return rawPlaces.filter((p: PlaceResult) => !p.businessStatus || p.businessStatus === 'OPERATIONAL');
     } catch (error) {
         console.error('❌ nearbySearch fetch failed:', error);
         return [];

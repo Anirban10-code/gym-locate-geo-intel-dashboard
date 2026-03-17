@@ -173,11 +173,22 @@ const MapZoomController = ({ center, zoom, navigateKey }: { center: [number, num
     const map = useMap();
     useEffect(() => {
         const target = center ?? [BANGALORE_CENTER.lat, BANGALORE_CENTER.lng] as [number, number];
-        // Stop any in-progress pan/zoom animation first, then flyTo.
-        // map.setView() with animate:true can silently fail when a prior animation is
-        // still active (e.g. after a cluster click). flyTo() + stop() is always reliable.
+        // 1. Close any open popup FIRST.
+        //    This is critical: if a cluster popup is open, Leaflet's autoPan will
+        //    continuously fight our setView by re-centering towards the popup anchor,
+        //    making the map drift toward the cluster instead of the true destination.
+        map.closePopup();
+        // 2. Cancel any in-progress animation.
         map.stop();
-        map.flyTo(target, zoom, { duration: 0.6, easeLinearity: 0.5 });
+        // 3. Navigate on the next paint frame so Leaflet's stop() has fully committed.
+        //    setView is used (not flyTo) because it is a single-step pan+zoom —
+        //    flyTo's multi-phase animation is far more prone to being swallowed when
+        //    called right after an interrupted cluster animation.
+        let rafId: number;
+        rafId = requestAnimationFrame(() => {
+            map.setView(target, zoom, { animate: true, duration: 0.5 });
+        });
+        return () => cancelAnimationFrame(rafId);
     }, [center, navigateKey, zoom, map]);
     return null;
 };
@@ -342,6 +353,66 @@ const App: React.FC = () => {
     // DOMAIN: Active analysis domain (gym / restaurant / bank)
     const [activeDomain, setActiveDomain] = useState<DomainId>('gym');
 
+    // CUSTOM PARAMETERS: user-defined scoring factors
+    interface CustomParam {
+        id: string;
+        label: string;
+        poiType: string;
+        importance: number; // 1–5 slider
+        saturationLimit: number;
+        score?: number;
+        places?: any[];
+        color?: string;
+    }
+    const CUSTOM_POI_OPTIONS = [
+        { label: 'School / Education', value: 'school' },
+        { label: 'Hospital / Clinic', value: 'hospital' },
+        { label: 'Park / Outdoors', value: 'park' },
+        { label: 'Temple', value: 'hindu_temple' },
+        { label: 'Mosque', value: 'mosque' },
+        { label: 'Church', value: 'church' },
+        { label: 'University Campus', value: 'university' },
+        { label: 'Supermarket', value: 'supermarket' },
+        { label: 'Cinema / Theatre', value: 'movie_theater' },
+        { label: 'Gym / Fitness', value: 'gym' },
+        { label: 'Pharmacy', value: 'pharmacy' },
+        { label: 'Restaurant', value: 'restaurant' },
+        { label: 'Metro Station', value: 'subway_station' },
+        { label: 'Parking Lot', value: 'parking' },
+    ];
+    // Dynamic colors for custom parameters to keep them distinct
+    const CUSTOM_COLORS = ['#8b5cf6', '#ec4899', '#f97316', '#14b8a6', '#eab308'];
+    const importanceWeightMap: Record<number, number> = { 1: 0.05, 2: 0.08, 3: 0.12, 4: 0.18, 5: 0.25 };
+    const satLimitOptions = [3, 5, 8, 12, 20];
+
+    const [customParams, setCustomParams] = useState<CustomParam[]>([]);
+    const [customParamForm, setCustomParamForm] = useState({ label: '', poiType: 'school', importance: 3, saturationLimit: 20 });
+    const [showCustomParamPanel, setShowCustomParamPanel] = useState(false);
+    const [customPOIs, setCustomPOIs] = useState<Record<string, any[]>>({}); // id → places
+
+    // REF: Sync custom params to a ref so performAnalysis can read them without triggering re-runs
+    const customParamsRef = useRef<CustomParam[]>([]);
+    useEffect(() => { customParamsRef.current = customParams; }, [customParams]);
+
+    const addCustomParam = () => {
+        if (customParams.length >= 3 || !customParamForm.label.trim()) return;
+        const color = CUSTOM_COLORS[customParams.length % CUSTOM_COLORS.length];
+        const newParam: CustomParam = {
+            id: Math.random().toString(36).slice(2),
+            label: customParamForm.label.trim(),
+            poiType: customParamForm.poiType,
+            importance: customParamForm.importance,
+            saturationLimit: customParamForm.saturationLimit,
+            color
+        };
+        setCustomParams(prev => [...prev, newParam]);
+        setCustomParamForm({ label: '', poiType: 'school', importance: 3, saturationLimit: 8 });
+    };
+
+    const removeCustomParam = (id: string) => {
+        setCustomParams(prev => prev.filter(p => p.id !== id));
+        setCustomPOIs(prev => { const n = { ...prev }; delete n[id]; return n; });
+    };
 
     // AUTOCOMPLETE: Compute suggestions whenever searchQuery changes
     const updateSearchSuggestions = useCallback((q: string) => {
@@ -463,15 +534,14 @@ const App: React.FC = () => {
                 setQueryDescription(description + domainNote);
                 setSearchResults(results);  // Display results
 
-                // If single result, zoom to it automatically
-                if (results.length === 1) {
-                    const ward = results[0];
-                    setSelectedPos([ward.lat, ward.lng]);
-                    setSelectedCluster(ward.id);
-                    setSelectedWard(null);
-                    setMapZoom(14);
-                    setMapNavigateKey(k => k + 1);
-                }
+                // Always navigate to the first result and clear any stale cluster lock
+                // so the map doesn't stay stuck at the previously‑clicked cluster.
+                const firstWard = results[0];
+                setSelectedPos([firstWard.lat, firstWard.lng]);
+                setSelectedCluster(results.length === 1 ? firstWard.id : null);
+                setSelectedWard(null);
+                setMapZoom(results.length === 1 ? 14 : 12); // zoom out for multi-result
+                setMapNavigateKey(k => k + 1);
                 return;
             }
 
@@ -571,7 +641,9 @@ const App: React.FC = () => {
             }
             if (final) {
                 setSearchQuery(final.trim());
-                handlePlaceSearch(final.trim());
+                // Route voice search through chat like all other search entry points
+                setChatOpen(true);
+                setTimeout(() => { handleUserMessage(final.trim()); }, 100);
             } else if (interim) {
                 setSearchQuery(interim);
             }
@@ -660,6 +732,9 @@ const App: React.FC = () => {
 
         try {
             const domain = DOMAIN_CONFIG[domainToUse];
+            // Hoisted so the custom-params block (after the if/else) can access them from both branches
+            let realScores: ReturnType<typeof calculateDomainScores> | null = null;
+            let currentTotalScore = 0;
 
             if (domainToUse === 'gym') {
                 // ── GYM DOMAIN: Our advanced V2 scoring ─────────────────────
@@ -678,10 +753,10 @@ const App: React.FC = () => {
                     parks: []
                 });
 
-                const realScores = calculateDomainScores(intel, domainToUse, searchRadius);
+                realScores = calculateDomainScores(intel, domainToUse, searchRadius);
+                currentTotalScore = realScores.total;
 
                 console.log('📊 SCORING V2 (GYM):', realScores);
-                setScores(realScores);
 
                 if (effectiveCluster) {
                     const opportunityScore = realScores.total / 100;
@@ -722,10 +797,10 @@ const App: React.FC = () => {
                 });
 
                 // Domain-specific scoring using dynamically loaded engine
-                const realScores = calculateDomainScores(intel, domainToUse, searchRadius);
+                realScores = calculateDomainScores(intel, domainToUse, searchRadius);
+                currentTotalScore = realScores.total;
 
                 console.log(`📊 SCORING (${domain.label}):`, realScores);
-                setScores(realScores);
 
                 if (effectiveCluster) {
                     const opportunityScore = realScores.total / 100;
@@ -739,6 +814,53 @@ const App: React.FC = () => {
 
                 const recommendation = generateDomainRecommendation(intel, domainToUse);
                 setAiInsight(recommendation);
+            }
+
+            // ── Custom Parameters: fetch + score each user-defined param ──────────
+            const currentCustomParams = customParamsRef.current;
+            if (currentCustomParams.length > 0 && analysisPos) {
+                const { nearbySearch: customNearby } = await import('./services/placesAPIService');
+                const BASIC_MASK = 'places.id,places.location,places.displayName,places.types,places.businessStatus';
+                const updatedParams = [...currentCustomParams];
+                const newPOIs: Record<string, any[]> = {};
+                let customWeightSum = 0;
+                let customWeightedScoreSum = 0;
+
+                await Promise.all(currentCustomParams.map(async (param, i) => {
+                    try {
+                        // Use primaryOnly: true to reduce false positives (secondary matches)
+                        const rawPlaces = await customNearby(analysisPos[0], analysisPos[1], searchRadius, [param.poiType], true, BASIC_MASK);
+                        // Filter for OPERATIONAL businesses only
+                        const places = rawPlaces.filter((p: any) => !p.businessStatus || p.businessStatus === 'OPERATIONAL');
+                        newPOIs[param.id] = places;
+                        const raw = Math.min(places.length, param.saturationLimit);
+                        const pScore = Math.round((raw / param.saturationLimit) * 100);
+                        updatedParams[i] = { ...param, score: pScore, places };
+
+                        // ── Apply Importance Weight to Final Score ──
+                        const weight = importanceWeightMap[param.importance] || 0.12;
+                        customWeightSum += weight;
+                        customWeightedScoreSum += (pScore * weight);
+                    } catch {
+                        updatedParams[i] = { ...param, score: 0, places: [] };
+                    }
+                }));
+
+                // Re-balance the final Suitability Score
+                if (customWeightSum > 0) {
+                    // Clamp total custom weight to 100% so it can't exceed the base score
+                    const safeWeightSum = Math.min(customWeightSum, 1.0);
+                    const baseWeight = 1 - safeWeightSum;
+                    currentTotalScore = Math.round((currentTotalScore * baseWeight) + customWeightedScoreSum);
+                }
+
+                setCustomParams(updatedParams);
+                setCustomPOIs(newPOIs);
+            }
+
+            if (realScores) {
+                console.log(`📊 FINAL SCORING:`, { total: currentTotalScore });
+                setScores({ ...realScores, total: currentTotalScore });
             }
 
             setIsAnalyzing(false);
@@ -766,6 +888,13 @@ const App: React.FC = () => {
         };
     }, [selectedPos, activeDomain, performAnalysis]);
 
+    // Re-run analysis automatically when a custom parameter is added or removed
+    useEffect(() => {
+        if (selectedPos) {
+            performAnalysis();
+        }
+    }, [customParams.length, performAnalysis]);
+
     const catchmentOverlap = useMemo(() => {
         if (!selectedPos) return [];
         const R = 6371;
@@ -790,13 +919,26 @@ const App: React.FC = () => {
         if (!scores) return [];
         const d = DOMAIN_CONFIG[activeDomain].scoring;
         const pct = (w: number) => `(${Math.round(w * 100)}%)`;
-        return [
+        const base = [
             { name: `${d.demand.label} ${pct(d.demand.weight)}`, score: scores.demographicLoad, color: d.demand.color, desc: d.demand.desc },
             { name: `${d.connectivity.label} ${pct(d.connectivity.weight)}`, score: scores.connectivity, color: d.connectivity.color, desc: d.connectivity.desc },
             { name: `${d.gap.label} ${pct(d.gap.weight)}`, score: scores.competitorRatio, color: d.gap.color, desc: d.gap.desc },
             { name: `${d.infra.label} ${pct(d.infra.weight)}`, score: scores.infrastructure, color: d.infra.color, desc: d.infra.desc },
         ];
-    }, [scores, activeDomain]);
+        // Append custom param bars
+        const custom = customParams
+            .filter(p => p.score !== undefined)
+            .map(p => {
+                const weightPct = Math.round((importanceWeightMap[p.importance] || 0.12) * 100);
+                return {
+                    name: `${p.label} (${weightPct}%)`,
+                    score: p.score!,
+                    color: p.color || '#a855f7',
+                    desc: p.poiType
+                };
+            });
+        return [...base, ...custom];
+    }, [scores, activeDomain, customParams]);
 
 
     const getVerdict = () => {
@@ -898,7 +1040,15 @@ const App: React.FC = () => {
                                     // generateDataDrivenRecommendation works for this format across all domains.
                                     const cachedScores = calculateDomainScores(intel, detectedDomain as DomainId, searchRadius);
                                     setScores(cachedScores);
-                                    setAiInsight(generateDataDrivenRecommendation(intel, cachedScores));
+                                    // Use the correct recommendation function based on domain
+                                    // prefetchedIntel is now DomainLocationIntelligence for non-gym domains
+                                    // (has .competitors field) and LocationIntelligence for gym (has .gyms field)
+                                    const isDomainIntel = 'competitors' in intel;
+                                    if (isDomainIntel) {
+                                        setAiInsight(generateDomainRecommendation(intel, detectedDomain));
+                                    } else {
+                                        setAiInsight(generateDataDrivenRecommendation(intel, cachedScores));
+                                    }
 
                                     // For non-gym domains, fire performAnalysis in background to get
                                     // the proper domain-specific scoring (no UI blocking, free re-use of cache)
@@ -976,6 +1126,7 @@ const App: React.FC = () => {
 
                     {selectedPos && (
                         <Circle
+                            key={`search-circle-${mapNavigateKey}`}
                             center={selectedPos}
                             radius={searchRadius}
                             pathOptions={{
@@ -1232,6 +1383,49 @@ const App: React.FC = () => {
                             </Marker>
                         );
                     })}
+
+                    {/* ─── Custom Parameter POI Markers ─── */}
+                    {selectedPos && customParams.map((param) => {
+                        const places = customPOIs[param.id] || [];
+                        const [cLat, cLng] = selectedPos;
+                        return places
+                            .filter((p: any) => {
+                                if (!p.location?.lat || !p.location?.lng) return false;
+                                const R = 6371e3;
+                                const rad = Math.PI / 180;
+                                const dLat = (p.location.lat - cLat) * rad;
+                                const dLon = (p.location.lng - cLng) * rad;
+                                const a = Math.sin(dLat / 2) ** 2 + Math.cos(cLat * rad) * Math.cos(p.location.lat * rad) * Math.sin(dLon / 2) ** 2;
+                                const dist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+                                return dist <= searchRadius;
+                            })
+                            .map((p: any, idx: number) => {
+                                const mColor = param.color || '#a855f7';
+                                const initial = (param.label || 'C').charAt(0).toUpperCase();
+                                const poiLabel = CUSTOM_POI_OPTIONS.find(o => o.value === param.poiType)?.label || param.poiType;
+                                return (
+                                    <Marker
+                                        key={`custom-${param.id}-${idx}`}
+                                        position={[p.location.lat, p.location.lng]}
+                                        icon={L.divIcon({
+                                            className: '',
+                                            html: `<div style="width:28px;height:28px;border-radius:50%;background:${mColor};border:2px solid #fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;color:#fff;box-shadow:0 3px 6px rgba(0,0,0,0.3)">${initial}</div>`,
+                                            iconSize: [28, 28],
+                                            iconAnchor: [14, 14],
+                                        })}
+                                    >
+                                        <Popup>
+                                            <div style={{ minWidth: 140 }}>
+                                                <div style={{ fontWeight: 900, fontSize: 12, color: '#1e293b', marginBottom: 2 }}>{p.displayName?.text || p.displayName || 'Unknown'}</div>
+                                                <div style={{ fontSize: 10, color: param.color || '#7c3aed', fontWeight: 700, marginBottom: 2 }}>{poiLabel}</div>
+                                                <div style={{ fontSize: 9, color: '#94a3b8', marginTop: 2 }}>Param: {param.label}</div>
+                                            </div>
+                                        </Popup>
+                                    </Marker>
+                                );
+                            });
+                    })}
+
                 </MapContainer>
 
                 {/* Legend */}
@@ -1315,7 +1509,7 @@ const App: React.FC = () => {
                             <input
                                 ref={searchInputRef}
                                 type="text"
-                                placeholder={isSearchListening ? '🎙️ Listening…' : 'Try: "top 3 spots" or ward name'}
+                                placeholder={isSearchListening ? '🎙️ Listening…' : 'Ask anything — AI chat will answer'}
                                 value={searchQuery}
                                 onChange={(e) => {
                                     setSearchQuery(e.target.value);
@@ -1335,20 +1529,9 @@ const App: React.FC = () => {
                                             setSearchQuery(chosen);
                                             setSearchSuggestions([]);
                                             setSuggestionIndex(-1);
-                                            
-                                            // Check if it's a question or normal search
-                                            const isQuestion = /\?|^what\b|^where\b|^how\b|^is\b|^are\b|^who\b|^when\b|^which\b|^tell\b|^show\b/i.test(chosen.trim());
-                                            
-                                            if (isQuestion) {
-                                                // Route to chat
-                                                setChatOpen(true);
-                                                setTimeout(() => {
-                                                    handleUserMessage(chosen);
-                                                }, 100);
-                                            } else {
-                                                // Normal location search
-                                                handlePlaceSearch(chosen);
-                                            }
+                                            // All queries go to the AI chatbot
+                                            setChatOpen(true);
+                                            setTimeout(() => { handleUserMessage(chosen); }, 100);
                                         }
                                     } else if (e.key === 'Escape') {
                                         setSearchSuggestions([]);
@@ -1384,20 +1567,9 @@ const App: React.FC = () => {
                                         const query = searchQuery.trim();
                                         if (query) {
                                             setSearchSuggestions([]);
-                                            
-                                            // Check if it's a question or normal search
-                                            const isQuestion = /\?|^what\b|^where\b|^how\b|^is\b|^are\b|^who\b|^when\b|^which\b|^tell\b|^show\b/i.test(query);
-                                            
-                                            if (isQuestion) {
-                                                // Route to chat
-                                                setChatOpen(true);
-                                                setTimeout(() => {
-                                                    handleUserMessage(query);
-                                                }, 100);
-                                            } else {
-                                                // Normal location search
-                                                handlePlaceSearch(query);
-                                            }
+                                            // All queries go to the AI chatbot
+                                            setChatOpen(true);
+                                            setTimeout(() => { handleUserMessage(query); }, 100);
                                         }
                                     }}
                                     className="px-3 bg-indigo-600 text-white text-xs font-black rounded-lg hover:shadow-lg transition-all"
@@ -1418,7 +1590,9 @@ const App: React.FC = () => {
                                                     setSearchQuery(s);
                                                     setSearchSuggestions([]);
                                                     setSuggestionIndex(-1);
-                                                    handlePlaceSearch(s);
+                                                    // All suggestions route to AI chatbot
+                                                    setChatOpen(true);
+                                                    setTimeout(() => { handleUserMessage(s); }, 100);
                                                 }}
                                                 className={`flex items-center gap-2 px-3 py-2 text-xs font-semibold cursor-pointer transition-colors ${idx === suggestionIndex ? 'bg-indigo-50 text-indigo-700' : 'text-slate-700 hover:bg-slate-50'}`}
                                             >
@@ -1647,6 +1821,64 @@ const App: React.FC = () => {
                                 </Bar>
                             </BarChart>
                         </ResponsiveContainer>
+                    </div>
+
+
+                    {/* ⚡ Custom Parameters Panel */}
+                    <div className="border border-purple-200 rounded-2xl overflow-hidden shrink-0">
+                        <button
+                            onClick={() => setShowCustomParamPanel(!showCustomParamPanel)}
+                            className="w-full flex items-center justify-between px-4 py-3 bg-purple-50 hover:bg-purple-100 transition-all"
+                        >
+                            <span className="text-[10px] font-black text-purple-700 uppercase tracking-widest">⚡ Custom Parameters ({customParams.length}/3)</span>
+                            <span className="text-purple-400 text-sm">{showCustomParamPanel ? '▲' : '▼'}</span>
+                        </button>
+
+                        {showCustomParamPanel && (
+                            <div className="p-3 bg-white flex flex-col gap-3">
+                                {customParams.map(p => (
+                                    <div key={p.id} className="flex items-center justify-between rounded-xl px-3 py-2 border shadow-sm" style={{ borderColor: p.color || '#e2e8f0', backgroundColor: `${p.color || '#94a3b8'}15` }}>
+                                        <div>
+                                            <div className="text-[10px] font-black" style={{ color: p.color || '#334155' }}>{p.label}</div>
+                                            <div className="text-[9px] text-slate-500 font-medium">Type: {p.poiType} · Sat@{p.saturationLimit} · Wt: {p.importance} · Score: {p.score ?? '—'}</div>
+                                        </div>
+                                        <button onClick={() => removeCustomParam(p.id)} className="text-slate-300 hover:text-red-500 text-xs font-bold ml-2 transition-colors">✕</button>
+                                    </div>
+                                ))}
+                                {customParams.length < 3 && (
+                                    <div className="flex flex-col gap-2 pt-1">
+                                        <input type="text" placeholder="Label, e.g. Near Schools" value={customParamForm.label}
+                                            onChange={e => setCustomParamForm(f => ({ ...f, label: e.target.value }))}
+                                            className="w-full text-[10px] border border-slate-200 rounded-xl px-3 py-2 focus:outline-none focus:border-purple-400" />
+                                        <select value={customParamForm.poiType}
+                                            onChange={e => setCustomParamForm(f => ({ ...f, poiType: e.target.value }))}
+                                            className="w-full text-[10px] border border-slate-200 rounded-xl px-3 py-2 focus:outline-none focus:border-purple-400">
+                                            {CUSTOM_POI_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                                        </select>
+                                        <div className="flex gap-2 items-center">
+                                            <span className="text-[9px] text-slate-400 font-bold whitespace-nowrap">Importance</span>
+                                            <input type="range" min={1} max={5} value={customParamForm.importance}
+                                                onChange={e => setCustomParamForm(f => ({ ...f, importance: Number(e.target.value) }))}
+                                                className="flex-1 accent-purple-500" />
+                                            <span className="text-[9px] font-black text-purple-700 w-4">{customParamForm.importance}</span>
+                                        </div>
+                                        <div className="flex gap-2 items-center">
+                                            <span className="text-[9px] text-slate-400 font-bold whitespace-nowrap">Saturation at</span>
+                                            <select value={customParamForm.saturationLimit}
+                                                onChange={e => setCustomParamForm(f => ({ ...f, saturationLimit: Number(e.target.value) }))}
+                                                className="flex-1 text-[10px] border border-slate-200 rounded-xl px-2 py-1 focus:outline-none focus:border-purple-400">
+                                                {satLimitOptions.map(v => <option key={v} value={v}>{v} POIs = 100%</option>)}
+                                            </select>
+                                        </div>
+                                        <button onClick={addCustomParam} disabled={!customParamForm.label.trim()}
+                                            className="w-full py-2 text-[10px] font-black rounded-xl bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-40 transition-all">
+                                            + Add Parameter
+                                        </button>
+                                    </div>
+                                )}
+                                {customParams.length >= 3 && <p className="text-[9px] text-slate-400 text-center">Max 3 custom parameters reached</p>}
+                            </div>
+                        )}
                     </div>
 
 
