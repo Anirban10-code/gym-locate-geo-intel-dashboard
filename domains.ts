@@ -79,10 +79,10 @@ export const DOMAIN_CONFIG: Record<DomainId, DomainConfig> = {
     competitorTypes: ['bank', 'atm'],
     infraTypes: ['shopping_mall', 'supermarket', 'department_store'],
     scoring: {
-      demand: { label: 'Density', desc: 'Offices + Residents', color: '#3b82f6', weight: 0.40, saturationLimit: 20 },
+      demand: { label: 'Demand', desc: 'Offices + Residents', color: '#3b82f6', weight: 0.40, saturationLimit: 20 },
       connectivity: { label: 'Access', desc: 'Transit + Footfall', color: '#34d399', weight: 0.25, saturationLimit: 8 },
       gap: { label: 'Gap', desc: 'Bank Competition', color: '#f59e0b', weight: 0.25, saturationLimit: 5 },
-      infra: { label: 'Anchors', desc: 'Retail + Commercial', color: '#ec4899', weight: 0.10, saturationLimit: 12 },
+      infra: { label: 'Commercial', desc: 'Retail + Commercial', color: '#ec4899', weight: 0.10, saturationLimit: 12 },
     },
   },
   retail: {

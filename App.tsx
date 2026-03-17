@@ -791,7 +791,7 @@ const App: React.FC = () => {
             const currentCustomParams = customParamsRef.current;
             if (currentCustomParams.length > 0) {
                 const { nearbySearch: customNearby } = await import('./services/placesAPIService');
-                const BASIC_MASK = 'places.id,places.location,places.displayName,places.types';
+                const BASIC_MASK = 'places.id,places.location,places.displayName,places.types,places.businessStatus';
                 const updatedParams = [...currentCustomParams];
                 const newPOIs: Record<string, any[]> = {};
                 let customWeightSum = 0;
@@ -799,7 +799,12 @@ const App: React.FC = () => {
 
                 await Promise.all(currentCustomParams.map(async (param, i) => {
                     try {
-                        const places = await customNearby(selectedPos[0], selectedPos[1], searchRadius, [param.poiType], false, BASIC_MASK);
+                        // Use primaryOnly: true to reduce false positives (secondary matches)
+                        const rawPlaces = await customNearby(selectedPos[0], selectedPos[1], searchRadius, [param.poiType], true, BASIC_MASK);
+                        
+                        // Filter for OPERATIONAL businesses only
+                        const places = rawPlaces.filter(p => !p.businessStatus || p.businessStatus === 'OPERATIONAL');
+                        
                         newPOIs[param.id] = places;
                         const raw = Math.min(places.length, param.saturationLimit);
                         const pScore = Math.round((raw / param.saturationLimit) * 100);
