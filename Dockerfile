@@ -26,12 +26,15 @@ RUN npm install -g serve
 # Copy built app from builder stage
 COPY --from=builder /app/dist ./dist
 
-# Expose port
-EXPOSE 3000
+# Add default PORT environment variable
+ENV PORT=8080
+
+# Expose port (Cloud Run sets this dynamically, but good practice for local)
+EXPOSE $PORT
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:3000', (r) => {if (r.statusCode !== 200) throw new Error(r.statusCode)})"
+  CMD node -e "require('http').get('http://localhost:' + process.env.PORT, (r) => {if (r.statusCode !== 200) throw new Error(r.statusCode)})"
 
 # Start the app
-CMD ["serve", "-s", "dist", "-l", "3000"]
+CMD serve -s dist -l tcp://0.0.0.0:$PORT
