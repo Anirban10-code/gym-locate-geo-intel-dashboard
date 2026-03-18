@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMapEvents, useMap, Circle, GeoJSON } from 'react-leaflet';
 import L from 'leaflet';
@@ -13,6 +12,7 @@ import { executeSearch, getQueryDescription, parseSearchIntent } from './searchU
 import { DOMAIN_CONFIG, DomainId } from './domains';
 import { calculateDomainScores } from './services/scoringEngine';
 import { ChatInterface } from './components/ChatInterface';
+import { TutorialOverlay } from './components/TutorialOverlay';
 import { addMessage, loadConversationHistory, clearConversationHistory, getRecentContext, extractLocationMentions, Message } from './services/conversationService';
 import { processUserQuery } from './services/chatOrchestrationService';
 
@@ -1710,20 +1710,7 @@ const App: React.FC = () => {
                                 <p className="text-[10px] font-bold text-slate-400 mt-1">Select an area to analyze</p>
                             )}
                         </div>
-                        <button
-                            onClick={() => {
-                                setChatOpen(true);
-                                const domainName = DOMAIN_ICON_MAP[activeDomain].infraLabel === 'LIFESTYLE' ? 'Gym' :
-                                    DOMAIN_ICON_MAP[activeDomain].infraLabel === 'FOOTFALL' ? 'Restaurant' :
-                                        DOMAIN_ICON_MAP[activeDomain].infraLabel === 'COMMERCIAL' ? 'Bank' : 'Retail store';
-                                handleUserMessage(`Suggest 3 highly creative, non-traditional marketing or business ideas for a new ${domainName} in this specific location based on the current data.`);
-                            }}
-                            className="p-2 rounded-xl transition-all border bg-amber-50 text-amber-600 border-amber-200 hover:bg-amber-100 hover:shadow-md group relative"
-                            title="Suggest Ideas"
-                        >
-                            <span className="text-sm">💡</span>
-                            <span className="absolute -bottom-8 right-0 opacity-0 group-hover:opacity-100 bg-slate-800 text-white text-[9px] font-bold px-2 py-1 rounded whitespace-nowrap transition-opacity pointer-events-none">Suggest Ideas</span>
-                        </button>
+                        <TutorialOverlay />
                     </header>
 
 
