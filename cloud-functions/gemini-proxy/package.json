@@ -8,6 +8,6 @@
     "@google/genai": "^1.37.0"
   },
   "engines": {
-    "node": "18"
+    "node": "22"
   }
 }
