@@ -8,11 +8,11 @@
 // Cloud Function proxy URLs (deployed on GCP)
 export const PLACES_PROXY_URL =
   import.meta.env.VITE_PLACES_PROXY_URL ||
-  'https://us-central1-testing-anirban.cloudfunctions.net/places-api-proxy';
+  'https://us-central1-testing-anirban.cloudfunctions.net/placesApiProxy';
 
 export const GEMINI_PROXY_URL =
   import.meta.env.VITE_GEMINI_PROXY_URL ||
-  'https://us-central1-testing-anirban.cloudfunctions.net/gemini-proxy';
+  'https://us-central1-testing-anirban.cloudfunctions.net/geminiProxy';
 
 // Set to true when running locally with direct API keys (dev mode only)
 export const USE_DIRECT_API =
