@@ -15,6 +15,8 @@ import { ChatInterface } from './components/ChatInterface';
 import { TutorialOverlay } from './components/TutorialOverlay';
 import { addMessage, loadConversationHistory, clearConversationHistory, getRecentContext, extractLocationMentions, Message } from './services/conversationService';
 import { processUserQuery } from './services/chatOrchestrationService';
+import { useAuth } from './components/AuthContext';
+import { LoginPage } from './components/LoginPage';
 
 /**
  * GYM-LOCATE: Geo-Intel Command Center (v8)
@@ -308,6 +310,13 @@ const SEARCH_KEYWORDS = [
 ];
 
 const App: React.FC = () => {
+    const { user, isAuthenticated, logout } = useAuth();
+
+    // --- AUTH GUARD: Show login page if not authenticated ---
+    if (!isAuthenticated) {
+        return <LoginPage />;
+    }
+
     const [selectedPos, setSelectedPos] = useState<[number, number] | null>(null);
     const [searchRadius, setSearchRadius] = useState<number>(1000);
     const [scores, setScores] = useState<ScoringMatrix | null>(null);
@@ -1504,7 +1513,6 @@ const App: React.FC = () => {
                             </div>
                         </div>
 
-                        {/* Search Input */}
                         <div className="flex-1 relative">
                             <input
                                 ref={searchInputRef}
@@ -1711,6 +1719,32 @@ const App: React.FC = () => {
                             )}
                         </div>
                         <TutorialOverlay />
+
+                        {/* User profile chip next to lightbulb */}
+                        {user && (
+                            <div className="flex items-center gap-1.5">
+                                <img
+                                    src={user.picture}
+                                    alt={user.name}
+                                    title={`Signed in as ${user.email}`}
+                                    className="w-7 h-7 rounded-full border-2 border-indigo-200 shadow-sm object-cover flex-shrink-0"
+                                    onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                                />
+                                <div className="flex flex-col leading-none max-w-[80px]">
+                                    <span className="text-[10px] font-black text-slate-800 truncate">{user.name.split(' ')[0]}</span>
+                                    <button
+                                        onClick={logout}
+                                        title="Sign out"
+                                        className="text-[9px] font-bold text-red-500 hover:text-red-700 text-left transition-colors mt-0.5 flex items-center gap-0.5"
+                                    >
+                                        <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h6a2 2 0 012 2v1" />
+                                        </svg>
+                                        Sign out
+                                    </button>
+                                </div>
+                            </div>
+                        )}
                     </header>
 
 

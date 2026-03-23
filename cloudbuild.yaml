@@ -10,6 +10,8 @@ steps:
       - 'gcr.io/$PROJECT_ID/geo-intel-dashboard:latest'
       - '-t'
       - 'gcr.io/$PROJECT_ID/geo-intel-dashboard:$SHORT_SHA'
+      - '--build-arg'
+      - 'VITE_GOOGLE_CLIENT_ID=$_GOOGLE_CLIENT_ID'
       - '.'
 
   # Step 2: Push the image to Container Registry
@@ -56,3 +58,4 @@ timeout: '2700s'
 substitutions:
   _REGION: 'us-central1'
   _SERVICE_NAME: 'geo-intel-dashboard'
+  _GOOGLE_CLIENT_ID: '' # Set this in your Cloud Build Trigger substitution variables

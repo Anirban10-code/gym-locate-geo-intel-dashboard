@@ -28,7 +28,10 @@ call gcloud services enable ^
 REM Step 2: Build Docker image
 echo.
 echo 🐳 Building Docker image...
-call docker build -t gcr.io/%PROJECT_ID%/geo-intel-dashboard:latest .
+set GOOGLE_CLIENT_ID=680180840921-brae1pidskfpi0d3m9s83eih4g2bu8ej.apps.googleusercontent.com
+call docker build ^
+  --build-arg VITE_GOOGLE_CLIENT_ID=%GOOGLE_CLIENT_ID% ^
+  -t gcr.io/%PROJECT_ID%/geo-intel-dashboard:latest .
 
 if errorlevel 1 (
   echo ❌ Docker build failed
